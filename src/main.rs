@@ -89,6 +89,8 @@ async fn main() -> anyhow::Result<()> {
 
     let bot = Bot::new(token).auto_send();
 
+    bot.set_my_commands(Command::bot_commands()).await?;
+
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
