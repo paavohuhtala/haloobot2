@@ -20,6 +20,12 @@ enum Command {
 
     #[command(description = "Apuva")]
     Help,
+
+    #[command(description = "Hae uusin Fingerpori")]
+    Fingerpori,
+
+    #[command(description = "Hae satunnainen Fingerpori")]
+    Randompori,
 }
 
 async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
@@ -42,13 +48,26 @@ async fn handle_command(
             .await
             .context("handle_dude_carpet"),
         Command::Help => send_help(&bot, &message).await.context("send_help"),
+        Command::Fingerpori => handlers::handle_fingerpori(&bot, &message)
+            .await
+            .context("handle_fingerpori"),
+        Command::Randompori => handlers::handle_randompori(&bot, &message)
+            .await
+            .context("handle_randompori"),
     };
 
     match result {
         Ok(()) => Ok(()),
         Err(err) => {
-            log::error!("{}", err);
-            bot.send_message(message.chat.id, "Jotain meni pieleen :(")
+            log::error!("{:#}", err);
+            bot.parse_mode(teloxide::types::ParseMode::Html)
+                .send_message(
+                    message.chat.id,
+                    format!(
+                        "Jotain meni pieleen :(\nEhkä tästä on apua:\n<pre>{:#}</pre>",
+                        err
+                    ),
+                )
                 .await?;
             Ok(())
         }

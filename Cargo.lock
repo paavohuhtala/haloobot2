@@ -481,6 +481,7 @@ dependencies = [
  "futures",
  "log",
  "pretty_env_logger",
+ "rand 0.8.5",
  "reqwest",
  "scraper",
  "serde",
