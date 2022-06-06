@@ -19,6 +19,16 @@ enum Command {
 
     #[command(description = "Hiljaisuus päättyy")]
     BreakSilence,
+
+    #[command(description = "Apuva")]
+    Help,
+}
+
+async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
+    bot.send_message(message.chat.id, Command::descriptions().to_string())
+        .await?;
+
+    Ok(())
 }
 
 async fn handle_command(
@@ -34,6 +44,9 @@ async fn handle_command(
             .await
             .context("handle_dude_carpet"),
         Command::BreakSilence => Ok(()),
+        Command::Help => send_help(&bot, &message)
+            .await
+            .context("Failed to send help"),
     };
 
     match result {
