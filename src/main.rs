@@ -1,4 +1,5 @@
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
     prelude::*,
@@ -16,9 +17,6 @@ enum Command {
 
     #[command(description = "Moro äijät mitäs äijät :D")]
     DudeCarpet,
-
-    #[command(description = "Hiljaisuus päättyy")]
-    BreakSilence,
 
     #[command(description = "Apuva")]
     Help,
@@ -43,10 +41,7 @@ async fn handle_command(
         Command::DudeCarpet => handlers::handle_dude_carpet(&bot, &message)
             .await
             .context("handle_dude_carpet"),
-        Command::BreakSilence => Ok(()),
-        Command::Help => send_help(&bot, &message)
-            .await
-            .context("Failed to send help"),
+        Command::Help => send_help(&bot, &message).await.context("send_help"),
     };
 
     match result {
@@ -70,8 +65,12 @@ async fn handle_message(bot: AutoSend<Bot>, message: Message) -> anyhow::Result<
     Ok(())
 }
 
-fn schema() -> UpdateHandler<anyhow::Error> {
+fn handler(start_time: DateTime<Utc>) -> UpdateHandler<anyhow::Error> {
     Update::filter_message()
+        .chain(dptree::filter(move |message: Message| {
+            // Ignore messages older than start_time to prevent massive spam
+            message.date > start_time
+        }))
         .branch(teloxide::filter_command::<Command, _>().chain(dptree::endpoint(handle_command)))
         .branch(dptree::endpoint(handle_message))
 }
@@ -83,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Starting haloobot2...");
 
+    let start_time = Utc::now();
+
     let token =
         std::env::var("TELEGRAM_TOKEN").context("TELEGRAM_TOKEN not found in environment")?;
 
@@ -91,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
-    Dispatcher::builder(bot, schema())
+    Dispatcher::builder(bot, handler(start_time))
         .default_handler(ignore_update)
         .build()
         .setup_ctrlc_handler()
