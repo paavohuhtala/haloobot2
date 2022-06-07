@@ -30,6 +30,12 @@ enum Command {
 
     #[command(description = "Hae satunnainen Fingerpori")]
     Randompori,
+
+    #[command(description = "im sorry jon")]
+    Lasaga,
+
+    #[command(description = "im sorry jon xD")]
+    RandomLasaga,
 }
 
 async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
@@ -58,6 +64,12 @@ async fn handle_command(
         Command::Randompori => handlers::handle_randompori(&bot, message.chat.id)
             .await
             .context("handle_randompori"),
+        Command::Lasaga => handlers::handle_lasaga(&bot, message.chat.id)
+            .await
+            .context("handle_lasaga"),
+        Command::RandomLasaga => handlers::handle_random_lasaga(&bot, message.chat.id)
+            .await
+            .context("handle_random_lasaga"),
     };
 
     match result {
