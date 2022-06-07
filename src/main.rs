@@ -7,7 +7,11 @@ use teloxide::{
     utils::command::BotCommands,
 };
 
+use crate::{db::open_and_prepare_db, scheduler::scheduled_event_handler};
+
+mod db;
 mod handlers;
+mod scheduler;
 
 #[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "Tuetut komennot:")]
@@ -48,10 +52,10 @@ async fn handle_command(
             .await
             .context("handle_dude_carpet"),
         Command::Help => send_help(&bot, &message).await.context("send_help"),
-        Command::Fingerpori => handlers::handle_fingerpori(&bot, &message)
+        Command::Fingerpori => handlers::handle_fingerpori(&bot, message.chat.id)
             .await
             .context("handle_fingerpori"),
-        Command::Randompori => handlers::handle_randompori(&bot, &message)
+        Command::Randompori => handlers::handle_randompori(&bot, message.chat.id)
             .await
             .context("handle_randompori"),
     };
@@ -101,6 +105,8 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Starting haloobot2...");
 
+    let _db = open_and_prepare_db()?;
+
     let start_time = Utc::now();
 
     let token =
@@ -110,15 +116,23 @@ async fn main() -> anyhow::Result<()> {
 
     bot.set_my_commands(Command::bot_commands()).await?;
 
+    log::info!("Commands registered & Telegram connection established.");
+
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
-    Dispatcher::builder(bot, handler(start_time))
+    let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
-        .build()
-        .setup_ctrlc_handler()
-        .dispatch()
-        .await;
+        .build();
+
+    let chat_ids = vec![ChatId(288342191)];
+
+    let (_, event_handler_result) = futures::join!(
+        dispatcher.setup_ctrlc_handler().dispatch(),
+        scheduled_event_handler(bot, &chat_ids)
+    );
+
+    event_handler_result?;
 
     Ok(())
 }
