@@ -1,7 +1,4 @@
-use std::{
-    str::FromStr,
-    sync::{mpsc::Sender, Arc, Mutex},
-};
+use std::str::FromStr;
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveTime, Utc};
@@ -62,7 +59,6 @@ async fn handle_command(
     bot: AutoSend<Bot>,
     message: Message,
     command: Command,
-    add_subscription: Arc<Mutex<Sender<Subscription>>>,
     db: DatabaseRef,
 ) -> anyhow::Result<()> {
     let result = match command {
@@ -122,10 +118,7 @@ async fn handle_command(
 
             db.add_subscription(subscription.clone()).await?;
 
-            {
-                let add_subscription = add_subscription.lock().unwrap();
-                add_subscription.send(subscription).unwrap();
-            }
+            log::info!("Added subscription: {:?}", subscription);
 
             bot.send_message(
                 message.chat.id,
@@ -202,27 +195,14 @@ async fn main() -> anyhow::Result<()> {
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
-    let (create_subscription, receive_subscription) = std::sync::mpsc::channel();
-
-    let create_subscription_shared = Arc::new(Mutex::new(create_subscription.clone()));
-
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
-        .dependencies(dptree::deps![create_subscription_shared, db.clone()])
+        .dependencies(dptree::deps![db.clone()])
         .build();
-
-    let subscriptions = db
-        .get_subscriptions()
-        .await
-        .context("Failed to get subscriptions")?;
-
-    for subscription in subscriptions {
-        create_subscription.send(subscription)?;
-    }
 
     let (_, event_handler_result) = futures::join!(
         dispatcher.setup_ctrlc_handler().dispatch(),
-        scheduled_event_handler(bot, receive_subscription)
+        scheduled_event_handler(bot, db.clone())
     );
 
     event_handler_result?;
