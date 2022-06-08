@@ -1,5 +1,12 @@
+use std::{
+    str::FromStr,
+    sync::{mpsc::Sender, Arc, Mutex},
+};
+
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveTime, Utc};
+use db::DatabaseRef;
+use subscriptions::{Subscription, SubscriptionType};
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
     prelude::*,
@@ -7,11 +14,14 @@ use teloxide::{
     utils::command::BotCommands,
 };
 
-use crate::{db::open_and_prepare_db, scheduler::scheduled_event_handler};
+use crate::{
+    db::open_and_prepare_db, scheduler::scheduled_event_handler, subscriptions::TIME_FORMAT,
+};
 
 mod db;
 mod handlers;
 mod scheduler;
+mod subscriptions;
 
 #[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "Tuetut komennot:")]
@@ -36,6 +46,9 @@ enum Command {
 
     #[command(description = "im sorry jon xD")]
     RandomLasaga,
+
+    #[command(description = "Tilaa ajoitettu tapahtuma", parse_with = "split")]
+    Subscribe { kind: String, time: String },
 }
 
 async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
@@ -49,6 +62,8 @@ async fn handle_command(
     bot: AutoSend<Bot>,
     message: Message,
     command: Command,
+    add_subscription: Arc<Mutex<Sender<Subscription>>>,
+    db: DatabaseRef,
 ) -> anyhow::Result<()> {
     let result = match command {
         Command::GetExcuse => handlers::handle_get_excuse(&bot, &message)
@@ -70,6 +85,60 @@ async fn handle_command(
         Command::RandomLasaga => handlers::handle_random_lasaga(&bot, message.chat.id)
             .await
             .context("handle_random_lasaga"),
+
+        Command::Subscribe { kind, time } => {
+            let kind = SubscriptionType::from_str(&kind);
+
+            let kind = match kind {
+                Ok(kind) => kind,
+                Err(_) => {
+                    bot.send_message(
+                        message.chat.id,
+                        "Epäkelpo tilauksen tyyppi. Käytä jokin seuraavista: comics, events",
+                    )
+                    .await?;
+
+                    return Ok(());
+                }
+            };
+
+            let time = NaiveTime::parse_from_str(&time, TIME_FORMAT);
+
+            let time = match time {
+                Ok(time) => time,
+                Err(_) => {
+                    bot.send_message(message.chat.id, "Epäkelpo ajankohta. Käytä muotoa HH:MM")
+                        .await?;
+
+                    return Ok(());
+                }
+            };
+
+            let subscription = Subscription {
+                chat_id: message.chat.id,
+                kind,
+                time,
+            };
+
+            db.add_subscription(subscription.clone()).await?;
+
+            {
+                let add_subscription = add_subscription.lock().unwrap();
+                add_subscription.send(subscription).unwrap();
+            }
+
+            bot.send_message(
+                message.chat.id,
+                format!(
+                    "🎉 Lisätty tilaus {}, päivittäin kello {}",
+                    kind.as_str(),
+                    time.format(TIME_FORMAT)
+                ),
+            )
+            .await?;
+
+            Ok(())
+        }
     };
 
     match result {
@@ -117,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Starting haloobot2...");
 
-    let _db = open_and_prepare_db()?;
+    let db = open_and_prepare_db()?;
 
     let start_time = Utc::now();
 
@@ -133,15 +202,27 @@ async fn main() -> anyhow::Result<()> {
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
+    let (create_subscription, receive_subscription) = std::sync::mpsc::channel();
+
+    let create_subscription_shared = Arc::new(Mutex::new(create_subscription.clone()));
+
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
+        .dependencies(dptree::deps![create_subscription_shared, db.clone()])
         .build();
 
-    let chat_ids = vec![ChatId(288342191)];
+    let subscriptions = db
+        .get_subscriptions()
+        .await
+        .context("Failed to get subscriptions")?;
+
+    for subscription in subscriptions {
+        create_subscription.send(subscription)?;
+    }
 
     let (_, event_handler_result) = futures::join!(
         dispatcher.setup_ctrlc_handler().dispatch(),
-        scheduled_event_handler(bot, &chat_ids)
+        scheduled_event_handler(bot, receive_subscription)
     );
 
     event_handler_result?;

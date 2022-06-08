@@ -1,31 +1,41 @@
-use std::{thread, time::Duration};
+use std::{sync::mpsc::Receiver, thread, time::Duration};
 
 use anyhow::Context;
-use chrono::NaiveTime;
 use clokwerk::{Scheduler, TimeUnits};
-use futures::{channel, StreamExt};
+use futures::{
+    channel::{self},
+    StreamExt,
+};
 use teloxide::prelude::*;
 
-use crate::handlers::handle_fingerpori;
-
-#[derive(Clone, Debug)]
-enum TaskType {
-    SendComics,
-}
-
-#[derive(Clone, Debug)]
-struct ScheduledTask(pub ChatId, pub TaskType);
+use crate::{
+    handlers::{handle_fingerpori, handle_lasaga},
+    subscriptions::{Subscription, SubscriptionType},
+};
 
 async fn handle_scheduled_task(
     bot: &AutoSend<Bot>,
-    ScheduledTask(chat_id, task): ScheduledTask,
+    subscription: Subscription,
 ) -> anyhow::Result<()> {
-    log::info!("Handling scheduled task {:?} for chat {:?}", task, chat_id);
+    log::info!(
+        "Handling scheduled task {} for chat {:?}",
+        subscription.kind.as_str(),
+        subscription.chat_id
+    );
 
-    match task {
-        TaskType::SendComics => handle_fingerpori(bot, chat_id)
-            .await
-            .context("handle_fingerpori (scheduled)"),
+    match subscription.kind {
+        SubscriptionType::Comics => {
+            handle_fingerpori(bot, subscription.chat_id)
+                .await
+                .context("handle_fingerpori (scheduled)")?;
+
+            handle_lasaga(bot, subscription.chat_id)
+                .await
+                .context("handle_lasaga (scheduled)")?;
+
+            Ok(())
+        }
+        SubscriptionType::Events => Ok(()),
     }
 }
 
@@ -41,40 +51,46 @@ async fn handle_scheduled_task(
 // TODO: Support adding more tasks at runtime
 pub async fn scheduled_event_handler(
     bot: AutoSend<Bot>,
-    chat_ids: &[ChatId],
+    receive_new_subscription: Receiver<Subscription>,
 ) -> anyhow::Result<()> {
     let mut scheduler = Scheduler::new();
 
-    let (send_task, receive_task) = channel::mpsc::unbounded();
-
-    for chat_id in chat_ids.iter().copied() {
-        let send_task = send_task.clone();
-
-        scheduler
-            .every(1.day())
-            .at_time(NaiveTime::from_hms(10, 5, 0))
-            .run(move || {
-                send_task
-                    .unbounded_send(ScheduledTask(chat_id, TaskType::SendComics))
-                    .expect("Expected pushing task to channel to never fail");
-            });
-    }
+    let (notify_subscription, receive_subscription) = channel::mpsc::unbounded();
 
     let scheduler_thread = thread::spawn(move || loop {
+        let new_subscription = receive_new_subscription.try_recv();
+
+        if let Ok(new_subscription) = new_subscription {
+            let notify_subscription = notify_subscription.clone();
+
+            scheduler
+                .every(1.day())
+                .at_time(new_subscription.time)
+                .run(move || {
+                    notify_subscription
+                        .unbounded_send(new_subscription.clone())
+                        .expect("Expected pushing task to channel to never fail");
+                });
+        }
+
         scheduler.run_pending();
         thread::sleep(Duration::from_secs(60));
     });
 
     log::info!("Task scheduler thread started.");
 
-    receive_task
-        .for_each(|task| async {
-            // Explicitly move the task a local variable.
-            let task = task;
-            let result = handle_scheduled_task(&bot, task.clone()).await;
+    receive_subscription
+        .for_each(|subscription| async {
+            // Explicitly move to a local variable.
+            let subscription = subscription;
+            let result = handle_scheduled_task(&bot, subscription.clone()).await;
 
             if let Err(err) = result {
-                log::error!("Scheduled task {:?} failed: {:#}", task.1, err);
+                log::error!(
+                    "Scheduled task {} failed: {:#}",
+                    subscription.kind.as_str(),
+                    err
+                );
             }
         })
         .await;
