@@ -8,7 +8,7 @@ use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
 use crate::{
-    autoreplies::{AddAutoreplyResult, Autoreply},
+    autoreplies::Autoreply,
     subscriptions::{Subscription, SubscriptionType, TIME_FORMAT},
 };
 
@@ -52,7 +52,7 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
         pattern_regex TEXT NOT NULL,
         response_json TEXT NOT NULL,
 
-        UNIQUE (chat_id, pattern_regex)
+        UNIQUE (chat_id, name)
       );
     "#,
         )
@@ -165,12 +165,13 @@ impl DatabaseRef {
         Ok(())
     }
 
-    pub async fn add_autoreply(&self, autoreply: &Autoreply) -> anyhow::Result<AddAutoreplyResult> {
+    pub async fn add_autoreply(&self, autoreply: &Autoreply) -> anyhow::Result<()> {
         let db = self.0.lock().await;
 
-        let result = db.0.execute(
+        db.0.execute(
             "
           INSERT INTO autoreplies (chat_id, name, pattern_regex, response_json) VALUES (?1, ?2, ?3, ?4)
+          ON CONFLICT (chat_id, name) DO UPDATE SET pattern_regex = ?3, response_json = ?4
         ",
             rusqlite::params![
                 autoreply.chat_id.0,
@@ -178,24 +179,9 @@ impl DatabaseRef {
                 autoreply.pattern_regex.as_str(),
                 serde_json::to_string(&autoreply.response).unwrap(),
             ],
-        );
+        )?;
 
-        match result {
-            Ok(_) => Ok(AddAutoreplyResult::Ok),
-            Err(
-                err @ rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
-                        ..
-                    },
-                    _,
-                ),
-            ) => {
-                log::warn!("Failed to add autoreply because conflicting regex already exists: {:?}, SQLite error: {:?}", autoreply.pattern_regex, err);
-                return Ok(AddAutoreplyResult::AlreadyExists);
-            }
-            Err(err) => Err(err).context("Failed to write autoreply to db")?,
-        }
+        Ok(())
     }
 
     fn transform_autoreply_rows(rows: Rows) -> anyhow::Result<Vec<Autoreply>> {

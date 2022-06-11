@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use itertools::Itertools;
+use multimap::MultiMap;
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 use teloxide::types::ChatId;
@@ -20,27 +21,22 @@ pub struct Autoreply {
     pub response: AutoreplyResponse,
 }
 
+#[derive(Debug)]
 pub struct AutoreplySet {
-    autoreplies_by_regex: HashMap<String, Autoreply>,
+    autoreplies_by_regex: MultiMap<String, Autoreply>,
     autoreply_set: RegexSet,
-}
-
-#[derive(Clone, Debug)]
-pub enum AddAutoreplyResult {
-    Ok,
-    AlreadyExists,
 }
 
 impl AutoreplySet {
     pub fn empty() -> Self {
         Self {
-            autoreplies_by_regex: HashMap::new(),
+            autoreplies_by_regex: MultiMap::new(),
             autoreply_set: RegexSet::empty(),
         }
     }
 
     pub fn new(autoreplies: &[Autoreply]) -> Self {
-        let mut autoreplies_by_regex = HashMap::new();
+        let mut autoreplies_by_regex = MultiMap::new();
 
         for autoreply in autoreplies {
             autoreplies_by_regex.insert(
@@ -52,7 +48,8 @@ impl AutoreplySet {
         let autoreply_set = RegexSet::new(
             autoreplies
                 .iter()
-                .map(|autoreply| autoreply.pattern_regex.as_str()),
+                .map(|autoreply| autoreply.pattern_regex.as_str())
+                .unique(),
         )
         .expect("Creating regex set should never fail");
 
@@ -64,14 +61,21 @@ impl AutoreplySet {
 
     pub fn get_matches<'a>(&'a self, message: &str) -> Vec<&'a Autoreply> {
         let match_collection = self.autoreply_set.matches(message);
+        let mut matching_autoreplies = Vec::new();
 
-        match_collection
-            .iter()
-            .filter_map(|regex_index| {
-                let regex = self.autoreply_set.patterns()[regex_index].as_str();
-                self.autoreplies_by_regex.get(regex)
-            })
-            .collect()
+        println!("{:?}", match_collection);
+
+        for regex_index in match_collection {
+            println!("{}", regex_index);
+
+            let regex = self.autoreply_set.patterns()[regex_index].as_str();
+
+            if let Some(autoreplies) = self.autoreplies_by_regex.get_vec(regex) {
+                matching_autoreplies.extend(autoreplies);
+            }
+        }
+
+        matching_autoreplies
     }
 
     pub fn add_autoreply(&mut self, autoreply: Autoreply) {

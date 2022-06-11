@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use argument_parser::parse_arguments;
-use autoreplies::{AddAutoreplyResult, Autoreply, AutoreplySet, AutoreplySetMap};
+use autoreplies::{Autoreply, AutoreplySet, AutoreplySetMap};
 use chrono::{DateTime, NaiveTime, Utc};
 use db::DatabaseRef;
 use regex::Regex;
@@ -195,18 +195,7 @@ async fn handle_command(
                         response: AutoreplyResponse::Literal(response.to_string()),
                     };
 
-                    match db.add_autoreply(&autoreply).await? {
-                        AddAutoreplyResult::Ok => {}
-                        AddAutoreplyResult::AlreadyExists => {
-                            bot.send_message(
-                                chat_id,
-                                format!("Automaattinen vastaus on jo olemassa samalle regex-lauseelle 😭"),
-                            )
-                            .await?;
-
-                            return Ok(());
-                        }
-                    }
+                    db.add_autoreply(&autoreply).await?;
 
                     let mut autoreply_set_map = autoreply_set_map.write().await;
                     autoreply_set_map
@@ -263,17 +252,24 @@ async fn handle_message(
         Some(autoreply_set) => autoreply_set,
     };
 
+    let mut reply_message = String::new();
+
+    println!("{:#?}", autoreply_set);
+
     for reply in autoreply_set.get_matches(text) {
-        bot.send_message(
-            message.chat.id,
-            match &reply.response {
-                AutoreplyResponse::Literal(text) => text,
-                AutoreplyResponse::Sticker(text) => text,
-            },
-        )
-        .await?;
-        // TODO: handle multiple triggers
-        break;
+        match &reply.response {
+            AutoreplyResponse::Literal(text) => {
+                if !reply_message.is_empty() {
+                    reply_message.push_str(" ");
+                }
+                reply_message.push_str(text);
+            }
+            AutoreplyResponse::Sticker(_) => todo!("Sticker replies not implemented :("),
+        }
+    }
+
+    if !reply_message.is_empty() {
+        bot.send_message(message.chat.id, reply_message).await?;
     }
 
     Ok(())
