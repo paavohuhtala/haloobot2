@@ -63,11 +63,7 @@ impl AutoreplySet {
         let match_collection = self.autoreply_set.matches(message);
         let mut matching_autoreplies = Vec::new();
 
-        println!("{:?}", match_collection);
-
         for regex_index in match_collection {
-            println!("{}", regex_index);
-
             let regex = self.autoreply_set.patterns()[regex_index].as_str();
 
             if let Some(autoreplies) = self.autoreplies_by_regex.get_vec(regex) {

@@ -254,8 +254,6 @@ async fn handle_message(
 
     let mut reply_message = String::new();
 
-    println!("{:#?}", autoreply_set);
-
     for reply in autoreply_set.get_matches(text) {
         match &reply.response {
             AutoreplyResponse::Literal(text) => {
