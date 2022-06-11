@@ -2,19 +2,22 @@ use std::{str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use chrono::{DateTime, Local, NaiveTime};
-use rusqlite::Connection;
+use regex::Regex;
+use rusqlite::{Connection, Rows};
 use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
-use crate::subscriptions::{Subscription, SubscriptionType, TIME_FORMAT};
+use crate::{
+    autoreplies::{AddAutoreplyResult, Autoreply},
+    subscriptions::{Subscription, SubscriptionType, TIME_FORMAT},
+};
 
 pub struct Database(Connection);
 #[derive(Clone)]
 pub struct DatabaseRef(Arc<Mutex<Database>>);
 
 pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
-    let connection = Connection::open("haloo.db3")?;
-    // let connection = Connection::open_in_memory().context("Failed to open SQLite database")?;
+    let connection = Connection::open("haloo.db3").context("Failed to open SQLite database")?;
 
     connection
         .execute_batch(
@@ -40,6 +43,16 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
         last_updated TEXT,
 
         PRIMARY KEY (chat_id, subscription_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS autoreplies (
+        id INTEGER NOT NULL PRIMARY KEY,
+        chat_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        pattern_regex TEXT NOT NULL,
+        response_json TEXT NOT NULL,
+
+        UNIQUE (chat_id, pattern_regex)
       );
     "#,
         )
@@ -134,13 +147,13 @@ impl DatabaseRef {
         Ok(())
     }
 
-    pub async fn add_subscription(&self, subscription: Subscription) -> anyhow::Result<()> {
+    pub async fn add_subscription(&self, subscription: &Subscription) -> anyhow::Result<()> {
         let db = self.0.lock().await;
 
         db.0.execute(
             "
-        INSERT INTO subscriptions (chat_id, subscription_type, time) VALUES (?1, ?2, ?3)
-        ON CONFLICT (chat_id, subscription_type) DO UPDATE SET time = ?3
+          INSERT INTO subscriptions (chat_id, subscription_type, time) VALUES (?1, ?2, ?3)
+          ON CONFLICT (chat_id, subscription_type) DO UPDATE SET time = ?3
         ",
             rusqlite::params![
                 subscription.chat_id.0,
@@ -150,5 +163,102 @@ impl DatabaseRef {
         )?;
 
         Ok(())
+    }
+
+    pub async fn add_autoreply(&self, autoreply: &Autoreply) -> anyhow::Result<AddAutoreplyResult> {
+        let db = self.0.lock().await;
+
+        let result = db.0.execute(
+            "
+          INSERT INTO autoreplies (chat_id, name, pattern_regex, response_json) VALUES (?1, ?2, ?3, ?4)
+        ",
+            rusqlite::params![
+                autoreply.chat_id.0,
+                autoreply.name,
+                autoreply.pattern_regex.as_str(),
+                serde_json::to_string(&autoreply.response).unwrap(),
+            ],
+        );
+
+        match result {
+            Ok(_) => Ok(AddAutoreplyResult::Ok),
+            Err(
+                err @ rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                        ..
+                    },
+                    _,
+                ),
+            ) => {
+                log::warn!("Failed to add autoreply because conflicting regex already exists: {:?}, SQLite error: {:?}", autoreply.pattern_regex, err);
+                return Ok(AddAutoreplyResult::AlreadyExists);
+            }
+            Err(err) => Err(err).context("Failed to write autoreply to db")?,
+        }
+    }
+
+    fn transform_autoreply_rows(rows: Rows) -> anyhow::Result<Vec<Autoreply>> {
+        let mapped_rows = rows
+            .mapped(|row| {
+                let chat_id = row.get(0)?;
+                let name: String = row.get(1)?;
+                let pattern_regex: String = row.get(2)?;
+                let response_json: String = row.get(3)?;
+
+                Ok((chat_id, name, pattern_regex, response_json))
+            })
+            .filter_map(|row| match row {
+                Err(err) => {
+                    log::error!("Failed to read autoreply row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            })
+            .map(
+                |(chat_id, name, pattern_regex, response_json)| -> anyhow::Result<Autoreply> {
+                    let chat_id = ChatId(chat_id);
+                    let name = name;
+                    let pattern_regex = Regex::new(&pattern_regex)?;
+                    let response = serde_json::from_str(&response_json)?;
+
+                    Ok(Autoreply {
+                        chat_id,
+                        name,
+                        pattern_regex,
+                        response,
+                    })
+                },
+            )
+            .filter_map(|maybe_row| match maybe_row {
+                Err(err) => {
+                    log::error!("Failed to parse autoreply row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            })
+            .collect();
+
+        Ok(mapped_rows)
+    }
+
+    pub async fn get_autoreplies(&self) -> anyhow::Result<Vec<Autoreply>> {
+        let db = self.0.lock().await;
+
+        let mut statement = db.0.prepare(
+            "
+          SELECT chat_id, name, pattern_regex, response_json
+          FROM autoreplies
+        ",
+        )?;
+
+        let rows = statement
+            .query(rusqlite::params![])
+            .context("Failed to query database")?;
+
+        let mapped_rows =
+            Self::transform_autoreply_rows(rows).context("Failed to transform autoreply rows")?;
+
+        Ok(mapped_rows)
     }
 }

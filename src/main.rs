@@ -1,8 +1,11 @@
 use std::str::FromStr;
 
 use anyhow::Context;
+use argument_parser::parse_arguments;
+use autoreplies::{AddAutoreplyResult, Autoreply, AutoreplySet, AutoreplySetMap};
 use chrono::{DateTime, NaiveTime, Utc};
 use db::DatabaseRef;
+use regex::Regex;
 use subscriptions::{Subscription, SubscriptionType};
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
@@ -12,9 +15,14 @@ use teloxide::{
 };
 
 use crate::{
-    db::open_and_prepare_db, scheduler::scheduled_event_handler, subscriptions::TIME_FORMAT,
+    autoreplies::{create_autoreply_set_map, AutoreplyResponse},
+    db::open_and_prepare_db,
+    scheduler::scheduled_event_handler,
+    subscriptions::TIME_FORMAT,
 };
 
+mod argument_parser;
+mod autoreplies;
 mod db;
 mod handlers;
 mod scheduler;
@@ -46,6 +54,9 @@ enum Command {
 
     #[command(description = "Tilaa ajoitettu tapahtuma", parse_with = "split")]
     Subscribe { kind: String, time: String },
+
+    #[command(description = "Lisää automaattinen vastaus")]
+    AddMessage(String),
 }
 
 async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
@@ -60,6 +71,7 @@ async fn handle_command(
     message: Message,
     command: Command,
     db: DatabaseRef,
+    autoreply_set_map: AutoreplySetMap,
 ) -> anyhow::Result<()> {
     let result = match command {
         Command::GetExcuse => handlers::handle_get_excuse(&bot, &message)
@@ -116,7 +128,7 @@ async fn handle_command(
                 time,
             };
 
-            db.add_subscription(subscription.clone()).await?;
+            db.add_subscription(&subscription).await?;
 
             log::info!("Added subscription: {:?}", subscription);
 
@@ -129,6 +141,86 @@ async fn handle_command(
                 ),
             )
             .await?;
+
+            Ok(())
+        }
+
+        Command::AddMessage(args) => {
+            let args = parse_arguments(&args);
+            let chat_id = message.chat.id;
+
+            match args {
+                Err(err) => {
+                    bot.send_message(
+                        chat_id,
+                        format!("Parametrien parsinta epäonnistui: {}", err),
+                    )
+                    .await?;
+
+                    return Ok(());
+                }
+                Ok((_, args)) => {
+                    if args.len() != 3 {
+                        bot.send_message(
+                            chat_id,
+                            "Parametrien määrä väärin. Käytä muotoa: /addmessage <nimi> <regex> <viesti>",
+                        )
+                        .await?;
+
+                        return Ok(());
+                    }
+
+                    let name = &args[0];
+                    let pattern_regex = Regex::new(&args[1]);
+
+                    let pattern_regex = match pattern_regex {
+                        Ok(regex) => regex,
+                        Err(err) => {
+                            bot.send_message(
+                                chat_id,
+                                format!("Regex-lausekkeen parsinta epäonnistui: {}", err),
+                            )
+                            .await?;
+
+                            return Ok(());
+                        }
+                    };
+
+                    let response = &args[2];
+
+                    let autoreply = Autoreply {
+                        chat_id,
+                        name: name.to_string(),
+                        pattern_regex,
+                        response: AutoreplyResponse::Literal(response.to_string()),
+                    };
+
+                    match db.add_autoreply(&autoreply).await? {
+                        AddAutoreplyResult::Ok => {}
+                        AddAutoreplyResult::AlreadyExists => {
+                            bot.send_message(
+                                chat_id,
+                                format!("Automaattinen vastaus on jo olemassa samalle regex-lauseelle 😭"),
+                            )
+                            .await?;
+
+                            return Ok(());
+                        }
+                    }
+
+                    let mut autoreply_set_map = autoreply_set_map.write().await;
+                    autoreply_set_map
+                        .entry(chat_id)
+                        .or_insert_with(|| AutoreplySet::empty())
+                        .add_autoreply(autoreply);
+
+                    bot.send_message(
+                        chat_id,
+                        format!("🎉 Lisätty automaattinen vastaus {}", name),
+                    )
+                    .await?;
+                }
+            }
 
             Ok(())
         }
@@ -152,11 +244,36 @@ async fn handle_command(
     }
 }
 
-async fn handle_message(bot: AutoSend<Bot>, message: Message) -> anyhow::Result<()> {
+async fn handle_message(
+    bot: AutoSend<Bot>,
+    message: Message,
+    autoreply_set_map: AutoreplySetMap,
+) -> anyhow::Result<()> {
+    let chat_id = message.chat.id;
     let text = message.text().unwrap_or_default();
 
-    if text.contains("kalja") {
-        bot.send_message(message.chat.id, "oispa kaljaa").await?;
+    let autoreply_set_map = autoreply_set_map.read().await;
+
+    let autoreply_set = autoreply_set_map.get(&chat_id);
+
+    let autoreply_set = match autoreply_set {
+        None => {
+            return Ok(());
+        }
+        Some(autoreply_set) => autoreply_set,
+    };
+
+    for reply in autoreply_set.get_matches(text) {
+        bot.send_message(
+            message.chat.id,
+            match &reply.response {
+                AutoreplyResponse::Literal(text) => text,
+                AutoreplyResponse::Sticker(text) => text,
+            },
+        )
+        .await?;
+        // TODO: handle multiple triggers
+        break;
     }
 
     Ok(())
@@ -195,9 +312,18 @@ async fn main() -> anyhow::Result<()> {
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
+    let autoreplies = db
+        .get_autoreplies()
+        .await
+        .context("Failed to read autoreplies from DB")?;
+
+    log::info!("Loaded {} autoreplies", autoreplies.len());
+
+    let autoreply_set_map = create_autoreply_set_map(autoreplies);
+
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
-        .dependencies(dptree::deps![db.clone()])
+        .dependencies(dptree::deps![db.clone(), autoreply_set_map])
         .build();
 
     let (_, event_handler_result) = futures::join!(
