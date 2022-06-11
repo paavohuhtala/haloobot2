@@ -3,12 +3,13 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::Context;
 use chrono::{DateTime, Local, NaiveTime};
 use regex::Regex;
-use rusqlite::{Connection, Rows};
+use rusqlite::Connection;
 use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
 use crate::{
     autoreplies::Autoreply,
+    chat_config::ChatConfig,
     subscriptions::{Subscription, SubscriptionType, TIME_FORMAT},
 };
 
@@ -54,6 +55,11 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
 
         UNIQUE (chat_id, name)
       );
+
+      CREATE TABLE IF NOT EXISTS chat_settings (
+        chat_id INTEGER NOT NULL PRIMARY KEY,
+        autoreply_chance REAL NOT NULL
+      );
     "#,
         )
         .context("Failed to run database migrations")?;
@@ -67,6 +73,44 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
 }
 
 impl DatabaseRef {
+    pub async fn set_autoreply_chance(&self, chat_id: ChatId, chance: f64) -> anyhow::Result<()> {
+        let db = self.0.lock().await;
+
+        db.0.prepare(
+            "
+            INSERT INTO chat_settings(chat_id, autoreply_chance) VALUES (?1, ?2)
+            ON CONFLICT DO UPDATE SET autoreply_chance = ?2
+            ",
+        )?
+        .execute(rusqlite::params![chat_id.0, chance])
+        .context("Failed to update autoreply chance")?;
+
+        Ok(())
+    }
+
+    pub async fn get_chat_config(&self, chat_id: ChatId) -> anyhow::Result<Option<ChatConfig>> {
+        let db = self.0.lock().await;
+
+        let mut statement =
+            db.0.prepare("SELECT autoreply_chance FROM chat_settings WHERE chat_id = ?1")?;
+
+        let mut maybe_row = statement.query_and_then::<_, anyhow::Error, _, _>(
+            rusqlite::params![chat_id.0],
+            |row| {
+                let autoreply_chance = row.get::<_, f64>(0)?;
+                Ok(ChatConfig {
+                    chat_id,
+                    autoreply_chance,
+                })
+            },
+        )?;
+
+        match maybe_row.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn get_pending_subscriptions(
         &self,
         now: DateTime<Local>,
@@ -139,7 +183,7 @@ impl DatabaseRef {
                 UPDATE subscriptions
                 SET last_updated = datetime('now')
                 WHERE chat_id = ?1 AND subscription_type = ?2
-              ",
+            ",
             rusqlite::params![chat_id, subscription_type],
         )
         .context("Failed to update subscription timestamp")?;
@@ -152,8 +196,8 @@ impl DatabaseRef {
 
         db.0.execute(
             "
-          INSERT INTO subscriptions (chat_id, subscription_type, time) VALUES (?1, ?2, ?3)
-          ON CONFLICT (chat_id, subscription_type) DO UPDATE SET time = ?3
+            INSERT INTO subscriptions (chat_id, subscription_type, time) VALUES (?1, ?2, ?3)
+            ON CONFLICT (chat_id, subscription_type) DO UPDATE SET time = ?3
         ",
             rusqlite::params![
                 subscription.chat_id.0,
@@ -170,8 +214,8 @@ impl DatabaseRef {
 
         db.0.execute(
             "
-          INSERT INTO autoreplies (chat_id, name, pattern_regex, response_json) VALUES (?1, ?2, ?3, ?4)
-          ON CONFLICT (chat_id, name) DO UPDATE SET pattern_regex = ?3, response_json = ?4
+            INSERT INTO autoreplies (chat_id, name, pattern_regex, response_json) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT (chat_id, name) DO UPDATE SET pattern_regex = ?3, response_json = ?4
         ",
             rusqlite::params![
                 autoreply.chat_id.0,
@@ -184,7 +228,20 @@ impl DatabaseRef {
         Ok(())
     }
 
-    fn transform_autoreply_rows(rows: Rows) -> anyhow::Result<Vec<Autoreply>> {
+    pub async fn get_autoreplies(&self) -> anyhow::Result<Vec<Autoreply>> {
+        let db = self.0.lock().await;
+
+        let mut statement = db.0.prepare(
+            "
+            SELECT chat_id, name, pattern_regex, response_json
+            FROM autoreplies
+        ",
+        )?;
+
+        let rows = statement
+            .query(rusqlite::params![])
+            .context("Failed to query database")?;
+
         let mapped_rows = rows
             .mapped(|row| {
                 let chat_id = row.get(0)?;
@@ -224,26 +281,6 @@ impl DatabaseRef {
                 Ok(row) => Some(row),
             })
             .collect();
-
-        Ok(mapped_rows)
-    }
-
-    pub async fn get_autoreplies(&self) -> anyhow::Result<Vec<Autoreply>> {
-        let db = self.0.lock().await;
-
-        let mut statement = db.0.prepare(
-            "
-          SELECT chat_id, name, pattern_regex, response_json
-          FROM autoreplies
-        ",
-        )?;
-
-        let rows = statement
-            .query(rusqlite::params![])
-            .context("Failed to query database")?;
-
-        let mapped_rows =
-            Self::transform_autoreply_rows(rows).context("Failed to transform autoreply rows")?;
 
         Ok(mapped_rows)
     }

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use argument_parser::parse_arguments;
@@ -16,6 +16,7 @@ use teloxide::{
 
 use crate::{
     autoreplies::{create_autoreply_set_map, AutoreplyResponse},
+    chat_config::ChatConfigModel,
     db::open_and_prepare_db,
     scheduler::scheduled_event_handler,
     subscriptions::TIME_FORMAT,
@@ -23,6 +24,7 @@ use crate::{
 
 mod argument_parser;
 mod autoreplies;
+mod chat_config;
 mod db;
 mod handlers;
 mod scheduler;
@@ -57,6 +59,9 @@ enum Command {
 
     #[command(description = "Lisää automaattinen vastaus")]
     AddMessage(String),
+
+    #[command(description = "Aseta automaattisen vastauksen todennäköisyys")]
+    SetAutoreplyChance(f64),
 }
 
 async fn send_help(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
@@ -72,7 +77,10 @@ async fn handle_command(
     command: Command,
     db: DatabaseRef,
     autoreply_set_map: AutoreplySetMap,
+    chat_config_map: Arc<ChatConfigModel>,
 ) -> anyhow::Result<()> {
+    let chat_id = message.chat.id;
+
     let result = match command {
         Command::GetExcuse => handlers::handle_get_excuse(&bot, &message)
             .await
@@ -81,16 +89,16 @@ async fn handle_command(
             .await
             .context("handle_dude_carpet"),
         Command::Help => send_help(&bot, &message).await.context("send_help"),
-        Command::Fingerpori => handlers::handle_fingerpori(&bot, message.chat.id)
+        Command::Fingerpori => handlers::handle_fingerpori(&bot, chat_id)
             .await
             .context("handle_fingerpori"),
-        Command::Randompori => handlers::handle_randompori(&bot, message.chat.id)
+        Command::Randompori => handlers::handle_randompori(&bot, chat_id)
             .await
             .context("handle_randompori"),
-        Command::Lasaga => handlers::handle_lasaga(&bot, message.chat.id)
+        Command::Lasaga => handlers::handle_lasaga(&bot, chat_id)
             .await
             .context("handle_lasaga"),
-        Command::RandomLasaga => handlers::handle_random_lasaga(&bot, message.chat.id)
+        Command::RandomLasaga => handlers::handle_random_lasaga(&bot, chat_id)
             .await
             .context("handle_random_lasaga"),
 
@@ -101,7 +109,7 @@ async fn handle_command(
                 Ok(kind) => kind,
                 Err(_) => {
                     bot.send_message(
-                        message.chat.id,
+                        chat_id,
                         "Epäkelpo tilauksen tyyppi. Käytä jokin seuraavista: comics, events",
                     )
                     .await?;
@@ -115,7 +123,7 @@ async fn handle_command(
             let time = match time {
                 Ok(time) => time,
                 Err(_) => {
-                    bot.send_message(message.chat.id, "Epäkelpo ajankohta. Käytä muotoa HH:MM")
+                    bot.send_message(chat_id, "Epäkelpo ajankohta. Käytä muotoa HH:MM")
                         .await?;
 
                     return Ok(());
@@ -123,7 +131,7 @@ async fn handle_command(
             };
 
             let subscription = Subscription {
-                chat_id: message.chat.id,
+                chat_id: chat_id,
                 kind,
                 time,
             };
@@ -133,7 +141,7 @@ async fn handle_command(
             log::info!("Added subscription: {:?}", subscription);
 
             bot.send_message(
-                message.chat.id,
+                chat_id,
                 format!(
                     "🎉 Lisätty tilaus {}, päivittäin kello {}",
                     kind.as_str(),
@@ -147,7 +155,6 @@ async fn handle_command(
 
         Command::AddMessage(args) => {
             let args = parse_arguments(&args);
-            let chat_id = message.chat.id;
 
             match args {
                 Err(err) => {
@@ -213,6 +220,21 @@ async fn handle_command(
 
             Ok(())
         }
+
+        Command::SetAutoreplyChance(value) => {
+            chat_config_map.set_autoreply_chance(chat_id, value).await?;
+
+            bot.send_message(
+                chat_id,
+                format!(
+                    "🎉 Automaattisen vastauksen todennäköisyys asetettu arvoon {}",
+                    value
+                ),
+            )
+            .await?;
+
+            Ok(())
+        }
     };
 
     match result {
@@ -221,7 +243,7 @@ async fn handle_command(
             log::error!("{:#}", err);
             bot.parse_mode(teloxide::types::ParseMode::Html)
                 .send_message(
-                    message.chat.id,
+                    chat_id,
                     format!(
                         "Jotain meni pieleen :(\nEhkä tästä on apua:\n<pre>{:#}</pre>",
                         err
@@ -237,12 +259,14 @@ async fn handle_message(
     bot: AutoSend<Bot>,
     message: Message,
     autoreply_set_map: AutoreplySetMap,
+    chat_config_map: Arc<ChatConfigModel>,
 ) -> anyhow::Result<()> {
     let chat_id = message.chat.id;
     let text = message.text().unwrap_or_default();
 
-    let autoreply_set_map = autoreply_set_map.read().await;
+    let chat_config = chat_config_map.get(chat_id).await?;
 
+    let autoreply_set_map = autoreply_set_map.read().await;
     let autoreply_set = autoreply_set_map.get(&chat_id);
 
     let autoreply_set = match autoreply_set {
@@ -255,6 +279,12 @@ async fn handle_message(
     let mut reply_message = String::new();
 
     for reply in autoreply_set.get_matches(text) {
+        let p: f64 = rand::random();
+
+        if p > chat_config.autoreply_chance {
+            continue;
+        }
+
         match &reply.response {
             AutoreplyResponse::Literal(text) => {
                 if !reply_message.is_empty() {
@@ -315,9 +345,15 @@ async fn main() -> anyhow::Result<()> {
 
     let autoreply_set_map = create_autoreply_set_map(autoreplies);
 
+    let chat_config_map = Arc::new(ChatConfigModel::new(db.clone()));
+
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
-        .dependencies(dptree::deps![db.clone(), autoreply_set_map])
+        .dependencies(dptree::deps![
+            db.clone(),
+            autoreply_set_map,
+            chat_config_map
+        ])
         .build();
 
     let (_, event_handler_result) = futures::join!(
