@@ -200,7 +200,7 @@ async fn handle_command(
                     let mut autoreply_set_map = autoreply_set_map.write().await;
                     autoreply_set_map
                         .entry(chat_id)
-                        .or_insert_with(|| AutoreplySet::empty())
+                        .or_insert_with(AutoreplySet::empty)
                         .add_autoreply(autoreply);
 
                     bot.send_message(
@@ -260,7 +260,7 @@ async fn handle_message(
         match &reply.response {
             AutoreplyResponse::Literal(text) => {
                 if !reply_message.is_empty() {
-                    reply_message.push_str(" ");
+                    reply_message.push(' ');
                 }
                 reply_message.push_str(text);
             }

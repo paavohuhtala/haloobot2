@@ -3,7 +3,7 @@ use scraper::{Html, Selector};
 use teloxide::prelude::*;
 
 fn parse_dude_carpet(body: &str) -> anyhow::Result<String> {
-    let document = Html::parse_document(&body);
+    let document = Html::parse_document(body);
 
     let selector = Selector::parse("div").expect("Parsing selector should never fail");
 

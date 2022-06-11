@@ -17,7 +17,7 @@ pub fn parse_arguments(input: &str) -> IResult<&str, Vec<Cow<str>>> {
             escaped_transform(none_of("\\\""), '\\', one_of("\"\\")),
             tag("\""),
         ),
-        |s: String| Cow::Owned(s),
+        Cow::Owned,
     );
     let parse_unquoted_argument = map(take_while1(|c| c != ' ' && c != '"'), |s: &str| {
         Cow::Borrowed(s)
