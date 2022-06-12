@@ -7,7 +7,7 @@ use db::DatabaseRef;
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
     prelude::*,
-    types::Update,
+    types::{InputFile, Update},
     utils::command::BotCommands,
 };
 
@@ -28,7 +28,7 @@ mod subscriptions;
 
 #[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "Tuetut komennot:")]
-enum Command {
+pub enum Command {
     #[command(description = "Miksi härveli ei toimi?")]
     GetExcuse,
 
@@ -134,10 +134,46 @@ async fn handle_command(
 
 async fn handle_message(
     bot: AutoSend<Bot>,
+    db: DatabaseRef,
     message: Message,
     autoreply_set_map: AutoreplySetMap,
     chat_config_map: Arc<ChatConfigModel>,
 ) -> anyhow::Result<()> {
+    let mut is_reply_to_me = false;
+
+    if let Some(original_message) = message.reply_to_message() {
+        let me = bot
+            .get_me()
+            .await
+            .context("Expected get_me to never fail ")?;
+
+        match original_message.from() {
+            Some(from) => {
+                if from.id == me.id {
+                    is_reply_to_me = true;
+                }
+            }
+            _ => {}
+        }
+
+        let username = me.username.as_deref().unwrap_or_default();
+        let original_as_cmd = Command::parse(original_message.text().unwrap_or_default(), username);
+
+        match original_as_cmd {
+            Ok(_) if message.from() != original_message.from() => {
+                bot.send_message(message.chat.id, "😳").await?;
+                return Ok(());
+            }
+            Ok(Command::AddMessage(args)) => {
+                handlers::handle_add_message_reply(&bot, db, autoreply_set_map, &message, &args)
+                    .await?;
+
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     let chat_id = message.chat.id;
     let text = message.text().unwrap_or_default();
 
@@ -154,11 +190,16 @@ async fn handle_message(
     };
 
     let mut reply_message = String::new();
+    let autoreply_chance = if is_reply_to_me {
+        1.0
+    } else {
+        chat_config.autoreply_chance
+    };
 
     for reply in autoreply_set.get_matches(text) {
         let p: f64 = rand::random();
 
-        if p > chat_config.autoreply_chance {
+        if p > autoreply_chance {
             continue;
         }
 
@@ -169,7 +210,11 @@ async fn handle_message(
                 }
                 reply_message.push_str(text);
             }
-            AutoreplyResponse::Sticker(_) => todo!("Sticker replies not implemented :("),
+            AutoreplyResponse::Sticker(sticker_id) => {
+                bot.send_sticker(chat_id, InputFile::file_id(sticker_id))
+                    .await?;
+                return Ok(());
+            }
         }
     }
 

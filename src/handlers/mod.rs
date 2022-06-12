@@ -18,5 +18,6 @@ pub use lasaga::handle_random_lasaga;
 pub use subscription::handle_subscribe;
 
 pub use autoreply::handle_add_message;
+pub use autoreply::handle_add_message_reply;
 
 pub use config::handle_set_autoreply_chance;
