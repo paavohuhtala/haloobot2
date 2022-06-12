@@ -1,12 +1,9 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
-use argument_parser::parse_arguments;
-use autoreplies::{Autoreply, AutoreplySet, AutoreplySetMap};
-use chrono::{DateTime, NaiveTime, Utc};
+use autoreplies::AutoreplySetMap;
+use chrono::{DateTime, Utc};
 use db::DatabaseRef;
-use regex::Regex;
-use subscriptions::{Subscription, SubscriptionType};
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
     prelude::*,
@@ -19,7 +16,6 @@ use crate::{
     chat_config::ChatConfigModel,
     db::open_and_prepare_db,
     scheduler::scheduled_event_handler,
-    subscriptions::TIME_FORMAT,
 };
 
 mod argument_parser;
@@ -101,139 +97,20 @@ async fn handle_command(
         Command::RandomLasaga => handlers::handle_random_lasaga(&bot, chat_id)
             .await
             .context("handle_random_lasaga"),
-
         Command::Subscribe { kind, time } => {
-            let kind = SubscriptionType::from_str(&kind);
-
-            let kind = match kind {
-                Ok(kind) => kind,
-                Err(_) => {
-                    bot.send_message(
-                        chat_id,
-                        "Epäkelpo tilauksen tyyppi. Käytä jokin seuraavista: comics, events",
-                    )
-                    .await?;
-
-                    return Ok(());
-                }
-            };
-
-            let time = NaiveTime::parse_from_str(&time, TIME_FORMAT);
-
-            let time = match time {
-                Ok(time) => time,
-                Err(_) => {
-                    bot.send_message(chat_id, "Epäkelpo ajankohta. Käytä muotoa HH:MM")
-                        .await?;
-
-                    return Ok(());
-                }
-            };
-
-            let subscription = Subscription {
-                chat_id: chat_id,
-                kind,
-                time,
-            };
-
-            db.add_subscription(&subscription).await?;
-
-            log::info!("Added subscription: {:?}", subscription);
-
-            bot.send_message(
-                chat_id,
-                format!(
-                    "🎉 Lisätty tilaus {}, päivittäin kello {}",
-                    kind.as_str(),
-                    time.format(TIME_FORMAT)
-                ),
-            )
-            .await?;
-
-            Ok(())
+            handlers::handle_subscribe(&bot, chat_id, db, &kind, &time)
+                .await
+                .context("handle_subscribe")
         }
-
         Command::AddMessage(args) => {
-            let args = parse_arguments(&args);
-
-            match args {
-                Err(err) => {
-                    bot.send_message(
-                        chat_id,
-                        format!("Parametrien parsinta epäonnistui: {}", err),
-                    )
-                    .await?;
-
-                    return Ok(());
-                }
-                Ok((_, args)) => {
-                    if args.len() != 3 {
-                        bot.send_message(
-                            chat_id,
-                            "Parametrien määrä väärin. Käytä muotoa: /addmessage <nimi> <regex> <viesti>",
-                        )
-                        .await?;
-
-                        return Ok(());
-                    }
-
-                    let name = &args[0];
-                    let pattern_regex = Regex::new(&args[1]);
-
-                    let pattern_regex = match pattern_regex {
-                        Ok(regex) => regex,
-                        Err(err) => {
-                            bot.send_message(
-                                chat_id,
-                                format!("Regex-lausekkeen parsinta epäonnistui: {}", err),
-                            )
-                            .await?;
-
-                            return Ok(());
-                        }
-                    };
-
-                    let response = &args[2];
-
-                    let autoreply = Autoreply {
-                        chat_id,
-                        name: name.to_string(),
-                        pattern_regex,
-                        response: AutoreplyResponse::Literal(response.to_string()),
-                    };
-
-                    db.add_autoreply(&autoreply).await?;
-
-                    let mut autoreply_set_map = autoreply_set_map.write().await;
-                    autoreply_set_map
-                        .entry(chat_id)
-                        .or_insert_with(AutoreplySet::empty)
-                        .add_autoreply(autoreply);
-
-                    bot.send_message(
-                        chat_id,
-                        format!("🎉 Lisätty automaattinen vastaus {}", name),
-                    )
-                    .await?;
-                }
-            }
-
-            Ok(())
+            handlers::handle_add_message(&bot, chat_id, db, autoreply_set_map, &args)
+                .await
+                .context("handle_add_message")
         }
-
         Command::SetAutoreplyChance(value) => {
-            chat_config_map.set_autoreply_chance(chat_id, value).await?;
-
-            bot.send_message(
-                chat_id,
-                format!(
-                    "🎉 Automaattisen vastauksen todennäköisyys asetettu arvoon {}",
-                    value
-                ),
-            )
-            .await?;
-
-            Ok(())
+            handlers::handle_set_autoreply_chance(&bot, chat_id, chat_config_map, value)
+                .await
+                .context("handle_set_autoreply_chance")
         }
     };
 
