@@ -1,12 +1,16 @@
-use std::sync::Arc;
+use std::{io::Cursor, sync::Arc};
 
 use anyhow::Context;
 use autoreplies::AutoreplySetMap;
 use chrono::{DateTime, Utc};
 use db::DatabaseRef;
+use image::{self, ImageOutputFormat};
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
+    net::Download,
+    payloads::SendPhoto,
     prelude::*,
+    requests::MultipartRequest,
     types::{InputFile, Update},
     utils::command::BotCommands,
 };
@@ -175,6 +179,30 @@ async fn handle_message(
     }
 
     let chat_id = message.chat.id;
+
+    // If this is a sticker set without a set name, it is acccshually a WebP image sent as a sticker
+    if let Some(sticker) = message.sticker() {
+        if sticker.set_name.is_none() {
+            let sticker_file = bot
+                .get_file(&sticker.file_id)
+                .await
+                .context("Failed to get sticker")?;
+            let mut sticker_buffer = Vec::new();
+            bot.download_file(&sticker_file.file_path, &mut sticker_buffer)
+                .await?;
+
+            let image_png = re_encode_image(sticker_buffer, ImageOutputFormat::Jpeg(95))?;
+
+            let mut payload = SendPhoto::new(chat_id, InputFile::memory(image_png));
+            payload.reply_to_message_id = Some(message.id);
+            payload.caption = Some(String::from("Hieno sticker veliseni"));
+            MultipartRequest::new(bot.inner().clone(), payload)
+                .send()
+                .await
+                .context("Failed to send photo response")?;
+        }
+    }
+
     let text = message.text().unwrap_or_default();
 
     let chat_config = chat_config_map.get(chat_id).await?;
@@ -223,6 +251,15 @@ async fn handle_message(
     }
 
     Ok(())
+}
+
+fn re_encode_image(sticker_buffer: Vec<u8>, format: ImageOutputFormat) -> anyhow::Result<Vec<u8>> {
+    let image =
+        image::load_from_memory(&sticker_buffer).context("Failed to load sticker image :(")?;
+    let mut image_jpg = Vec::new();
+    let mut image_jpg_cursor = Cursor::new(&mut image_jpg);
+    image.write_to(&mut image_jpg_cursor, format)?;
+    Ok(image_jpg)
 }
 
 fn handler(start_time: DateTime<Utc>) -> UpdateHandler<anyhow::Error> {
