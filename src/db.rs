@@ -117,18 +117,21 @@ impl DatabaseRef {
     ) -> anyhow::Result<Vec<Subscription>> {
         let db = self.0.lock().await;
 
+        const SQL_TIME_FORMAT: &str = "%F %T";
+        let formatted_time = now.format(SQL_TIME_FORMAT).to_string();
+
         let mut statement = db.0.prepare(
             "
             SELECT chat_id, subscription_type, time
             FROM subscriptions
             WHERE
               ((last_updated IS NULL) OR (date(last_updated) < date(?1)))
-              AND subscriptions.time <= time(?1)
+              AND time(subscriptions.time) <= time(?1)
           ",
         )?;
 
         let rows: Vec<Subscription> = statement
-            .query(rusqlite::params![now])
+            .query(rusqlite::params![formatted_time])
             .context("Failed to query database")?
             .mapped(|row| {
                 let chat_id: i64 = row.get(0)?;
