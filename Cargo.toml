@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.57"
 chrono = "0.4.19"
+dashmap = "5.3.4"
 dotenv = "0.15.0"
 futures = "0.3.21"
 image = "0.24.2"

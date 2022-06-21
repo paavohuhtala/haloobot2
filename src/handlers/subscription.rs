@@ -15,7 +15,7 @@ pub async fn handle_subscribe(
     subscription_type: &str,
     time: &str,
 ) -> anyhow::Result<()> {
-    let kind = SubscriptionType::from_str(&subscription_type);
+    let kind = SubscriptionType::from_str(subscription_type);
 
     let kind = match kind {
         Ok(kind) => kind,
@@ -30,7 +30,7 @@ pub async fn handle_subscribe(
         }
     };
 
-    let time = NaiveTime::parse_from_str(&time, TIME_FORMAT);
+    let time = NaiveTime::parse_from_str(time, TIME_FORMAT);
 
     let time = match time {
         Ok(time) => time,
@@ -43,7 +43,7 @@ pub async fn handle_subscribe(
     };
 
     let subscription = Subscription {
-        chat_id: chat_id,
+        chat_id,
         kind,
         time,
     };

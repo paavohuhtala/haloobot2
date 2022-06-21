@@ -14,7 +14,9 @@ use teloxide::{
 use tokio::sync::RwLock;
 
 use crate::{
-    autoreplies::create_autoreply_set_map, chat_config::ChatConfigModel, db::open_and_prepare_db,
+    autoreplies::{create_autoreply_set_map, StickerCache},
+    chat_config::ChatConfigModel,
+    db::open_and_prepare_db,
     scheduler::scheduled_event_handler,
 };
 
@@ -99,12 +101,15 @@ async fn main() -> anyhow::Result<()> {
 
     let chat_config_map = Arc::new(ChatConfigModel::new(db.clone()));
 
+    let sticker_cache = Arc::new(StickerCache::new(db.clone(), chat_config_map.clone()));
+
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler(start_time))
         .default_handler(ignore_update)
         .dependencies(dptree::deps![
             db.clone(),
             autoreply_set_map,
-            chat_config_map
+            chat_config_map,
+            sticker_cache
         ])
         .build();
 

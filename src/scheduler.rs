@@ -89,7 +89,8 @@ async fn handle_subscriptions(db: &DatabaseRef, bot: &AutoSend<Bot>) -> Result<(
         .get_pending_subscriptions(now)
         .await
         .context("Failed to read pending subscriptions")?;
-    Ok(for subscription in subscriptions {
+
+    for subscription in subscriptions {
         // If the scheduled time was under 15 minutes ago, handle it.
         if (now.time() - subscription.time)
             < chrono::Duration::minutes(OUTDATED_SUBSCRIPTIONS_THRESHOLD_MINUTES)
@@ -111,8 +112,10 @@ async fn handle_subscriptions(db: &DatabaseRef, bot: &AutoSend<Bot>) -> Result<(
             );
         }
 
-        db.mark_subscription_updated(&subscription)
+        db.mark_subscription_updated(&subscription, now)
             .await
             .context("Failed to mark subscription as updated")?;
-    })
+    }
+
+    Ok(())
 }

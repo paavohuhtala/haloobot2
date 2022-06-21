@@ -1,11 +1,18 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
+use anyhow::Context;
+use dashmap::DashMap;
 use itertools::Itertools;
 use multimap::MultiMap;
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
-use teloxide::types::ChatId;
+use teloxide::types::{ChatId, Sticker};
 use tokio::sync::RwLock;
+
+use crate::{chat_config::ChatConfigModel, db::DatabaseRef};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AutoreplyResponse {
@@ -100,4 +107,141 @@ pub fn create_autoreply_set_map(replies: Vec<Autoreply>) -> AutoreplySetMap {
     }
 
     Arc::new(RwLock::new(autoreply_map))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StickerEntry {
+    pub id: String,
+    pub file_id: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StickersForEmoji {
+    /// An LRU cache of sticker IDs.
+    stickers: VecDeque<StickerEntry>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChatStickerCache {
+    by_emoji: HashMap<String, StickersForEmoji>,
+}
+
+pub struct StickerCache {
+    by_chat: DashMap<ChatId, ChatStickerCache>,
+    db: DatabaseRef,
+    config: Arc<ChatConfigModel>,
+}
+
+impl StickersForEmoji {
+    pub fn new(stickers: impl Into<VecDeque<StickerEntry>>) -> Self {
+        Self {
+            stickers: stickers.into(),
+        }
+    }
+
+    pub fn select_sticker_and_update<'a>(
+        &'a mut self,
+        lru_size: u32,
+        posted_sticker: &Sticker,
+    ) -> Option<&'a StickerEntry> {
+        use rand::prelude::*;
+
+        // Try to find the sticker ID in the cache.
+        let posted_sticker_index = self
+            .stickers
+            .iter()
+            .position(|sticker| sticker.id == posted_sticker.file_unique_id);
+
+        match posted_sticker_index {
+            // If it exists and is the first in the cache, we don't need to do anything.
+            Some(0) => {}
+            // If it exists, move it to the front of the queue by removing and re-inserting it.
+            Some(index) => {
+                let sticker = self.stickers.remove(index).unwrap();
+                self.stickers.push_front(sticker);
+            }
+            // Otherwise just add it to the front of the queue.
+            None => {
+                self.stickers.push_front(StickerEntry {
+                    id: posted_sticker.file_unique_id.clone(),
+                    file_id: posted_sticker.file_id.clone(),
+                });
+            }
+        }
+
+        self.stickers.truncate(lru_size as usize);
+
+        let selected_sticker = self
+            .stickers
+            .iter()
+            // Skip the first sticker, which is the sticker that was just posted.
+            .skip(1)
+            .choose(&mut thread_rng());
+
+        selected_sticker
+    }
+}
+
+impl ChatStickerCache {
+    pub fn new(by_emoji: HashMap<String, StickersForEmoji>) -> Self {
+        Self { by_emoji }
+    }
+
+    pub fn select_sticker_and_update<'a>(
+        &'a mut self,
+        lru_size: u32,
+        emoji: &str,
+        posted_sticker: &Sticker,
+    ) -> Option<&'a StickerEntry> {
+        let entry = self.by_emoji.entry(emoji.to_string()).or_default();
+        entry.select_sticker_and_update(lru_size, posted_sticker)
+    }
+}
+
+impl StickerCache {
+    pub fn new(db: DatabaseRef, config: Arc<ChatConfigModel>) -> Self {
+        StickerCache {
+            by_chat: DashMap::new(),
+            db,
+            config,
+        }
+    }
+
+    pub async fn update_and_get_response_sticker(
+        &self,
+        chat_id: ChatId,
+        emoji: &str,
+        posted_sticker: &Sticker,
+    ) -> anyhow::Result<Option<StickerEntry>> {
+        let config = self.config.get(chat_id).await?;
+        let lru_size = config.sticker_lru_size;
+
+        // We could do this with just one lookup using entry API if we didn't use async.
+
+        if !self.by_chat.contains_key(&chat_id) {
+            let new_entry = self.db.get_stickers_for_chat(chat_id).await?;
+            self.by_chat.insert(chat_id, new_entry);
+        }
+
+        let mut cache_entry = self
+            .by_chat
+            .get_mut(&chat_id)
+            .context("Sticker cache key should always exist after insertion")?;
+
+        let sticker = cache_entry
+            .select_sticker_and_update(lru_size, emoji, posted_sticker)
+            .map(|sticker| sticker.clone());
+
+        let stickers_for_emoji = cache_entry
+            .by_emoji
+            .get(emoji)
+            .context("Reading from cache should never fail")?;
+
+        self.db
+            .update_seen_stickers(chat_id, emoji, &stickers_for_emoji.stickers)
+            .await
+            .context("Failed to update seen stickers to db")?;
+
+        Ok(sticker)
+    }
 }

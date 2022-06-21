@@ -7,11 +7,13 @@ use tokio::sync::RwLock;
 use crate::db::DatabaseRef;
 
 pub const DEFAULT_AUTOREPLY_CHANCE: f64 = 0.5;
+pub const DEFAULT_STICKER_LRU_SIZE: u32 = 20;
 
 #[derive(Debug, Clone)]
 pub struct ChatConfig {
     pub chat_id: ChatId,
     pub autoreply_chance: f64,
+    pub sticker_lru_size: u32,
 }
 
 impl ChatConfig {
@@ -19,6 +21,7 @@ impl ChatConfig {
         Self {
             chat_id,
             autoreply_chance: DEFAULT_AUTOREPLY_CHANCE,
+            sticker_lru_size: DEFAULT_STICKER_LRU_SIZE,
         }
     }
 }

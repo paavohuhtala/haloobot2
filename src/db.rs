@@ -1,4 +1,8 @@
-use std::{str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    str::FromStr,
+    sync::Arc,
+};
 
 use anyhow::Context;
 use chrono::{DateTime, Local, NaiveTime};
@@ -8,14 +12,17 @@ use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
 use crate::{
-    autoreplies::Autoreply,
+    autoreplies::{Autoreply, ChatStickerCache, StickerEntry, StickersForEmoji},
     chat_config::ChatConfig,
     subscriptions::{Subscription, SubscriptionType, TIME_FORMAT},
 };
 
+#[derive(Debug)]
 pub struct Database(Connection);
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DatabaseRef(Arc<Mutex<Database>>);
+
+const SQL_TIME_FORMAT: &str = "%F %T";
 
 pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
     let connection = Connection::open("haloo.db3").context("Failed to open SQLite database")?;
@@ -58,7 +65,16 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
 
       CREATE TABLE IF NOT EXISTS chat_settings (
         chat_id INTEGER NOT NULL PRIMARY KEY,
-        autoreply_chance REAL NOT NULL
+        autoreply_chance REAL NOT NULL DEFAULT 0.5,
+        sticker_lru_size INTEGER NOT NULL DEFAULT 20
+      );
+
+      CREATE TABLE IF NOT EXISTS seen_stickers (
+        chat_id INTEGER NOT NULL,
+        emoji TEXT NOT NULL,
+        stickers_json TEXT NOT NULL,
+
+        UNIQUE (chat_id, emoji)
       );
     "#,
         )
@@ -91,16 +107,20 @@ impl DatabaseRef {
     pub async fn get_chat_config(&self, chat_id: ChatId) -> anyhow::Result<Option<ChatConfig>> {
         let db = self.0.lock().await;
 
-        let mut statement =
-            db.0.prepare("SELECT autoreply_chance FROM chat_settings WHERE chat_id = ?1")?;
+        let mut statement = db.0.prepare(
+            "SELECT autoreply_chance, sticker_lru_size FROM chat_settings WHERE chat_id = ?1",
+        )?;
 
         let mut maybe_row = statement.query_and_then::<_, anyhow::Error, _, _>(
             rusqlite::params![chat_id.0],
             |row| {
                 let autoreply_chance = row.get::<_, f64>(0)?;
+                let sticker_lru_size = row.get::<_, u32>(1)?;
+
                 Ok(ChatConfig {
                     chat_id,
                     autoreply_chance,
+                    sticker_lru_size,
                 })
             },
         )?;
@@ -117,7 +137,6 @@ impl DatabaseRef {
     ) -> anyhow::Result<Vec<Subscription>> {
         let db = self.0.lock().await;
 
-        const SQL_TIME_FORMAT: &str = "%F %T";
         let formatted_time = now.format(SQL_TIME_FORMAT).to_string();
 
         let mut statement = db.0.prepare(
@@ -175,19 +194,22 @@ impl DatabaseRef {
     pub async fn mark_subscription_updated(
         &self,
         subscription: &Subscription,
+        now: DateTime<Local>,
     ) -> anyhow::Result<()> {
         let db = self.0.lock().await;
 
         let chat_id = subscription.chat_id.0;
         let subscription_type = subscription.kind.as_str();
 
+        let formatted_time = now.format(SQL_TIME_FORMAT).to_string();
+
         db.0.execute(
             "
                 UPDATE subscriptions
-                SET last_updated = datetime('now')
+                SET last_updated = ?3
                 WHERE chat_id = ?1 AND subscription_type = ?2
             ",
-            rusqlite::params![chat_id, subscription_type],
+            rusqlite::params![chat_id, subscription_type, formatted_time],
         )
         .context("Failed to update subscription timestamp")?;
 
@@ -286,5 +308,83 @@ impl DatabaseRef {
             .collect();
 
         Ok(mapped_rows)
+    }
+
+    pub async fn update_seen_stickers(
+        &self,
+        chat_id: ChatId,
+        emoji: &str,
+        stickers: &VecDeque<StickerEntry>,
+    ) -> anyhow::Result<()> {
+        let db = self.0.lock().await;
+
+        let chat_id = chat_id.0;
+        let emoji = emoji;
+
+        let mut statement = db.0.prepare(
+            "
+            INSERT INTO seen_stickers (chat_id, emoji, stickers_json) VALUES (?1, ?2, ?3)
+            ON CONFLICT (chat_id, emoji) DO UPDATE SET stickers_json = ?3
+        ",
+        )?;
+
+        let stickers_json = serde_json::to_string(stickers).unwrap();
+
+        statement
+            .execute(rusqlite::params![chat_id, emoji, stickers_json])
+            .context("Failed to update seen stickers")?;
+
+        Ok(())
+    }
+
+    pub async fn get_stickers_for_chat(&self, chat_id: ChatId) -> anyhow::Result<ChatStickerCache> {
+        let db = self.0.lock().await;
+
+        let mut statement = db.0.prepare(
+            "
+            SELECT emoji, stickers_json
+            FROM seen_stickers
+            WHERE chat_id = ?1
+        ",
+        )?;
+
+        let rows = statement
+            .query(rusqlite::params![chat_id.0])
+            .context("Failed to query database")?;
+
+        let emoji_sticker_map: HashMap<String, StickersForEmoji> = rows
+            .mapped(|row| {
+                let emoji: String = row.get(0)?;
+                let stickers_json: String = row.get(1)?;
+
+                Ok((emoji, stickers_json))
+            })
+            .filter_map(|row| match row {
+                Err(err) => {
+                    log::error!("Failed to read seen stickers row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            })
+            .map(
+                |(emoji, stickers_json)| -> anyhow::Result<(String, StickersForEmoji)> {
+                    let stickers: VecDeque<StickerEntry> = serde_json::from_str(&stickers_json)?;
+                    let stickers = StickersForEmoji::new(stickers);
+
+                    Ok((emoji, stickers))
+                },
+            )
+            .filter_map(|maybe_row| match maybe_row {
+                Err(err) => {
+                    log::error!("Failed to parse seen stickers row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            })
+            .collect();
+
+        let cache = ChatStickerCache::new(emoji_sticker_map);
+
+        Ok(cache)
     }
 }

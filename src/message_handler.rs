@@ -8,7 +8,7 @@ use teloxide::{
 };
 
 use crate::{
-    autoreplies::{AutoreplyResponse, AutoreplySetMap},
+    autoreplies::{AutoreplyResponse, AutoreplySetMap, StickerCache},
     chat_config::ChatConfigModel,
     db::DatabaseRef,
     handlers, Command,
@@ -20,47 +20,47 @@ pub async fn handle_message(
     message: Message,
     autoreply_set_map: AutoreplySetMap,
     chat_config_map: Arc<ChatConfigModel>,
+    sticker_cache: Arc<StickerCache>,
 ) -> anyhow::Result<()> {
+    let chat_id = message.chat.id;
     let mut is_reply_to_me = false;
 
     if let Some(original_message) = message.reply_to_message() {
         let me = bot
             .get_me()
             .await
-            .context("Expected get_me to never fail ")?;
+            .context("Expected get_me to never fail")?;
 
-        match original_message.from() {
-            Some(from) => {
-                if from.id == me.id {
-                    is_reply_to_me = true;
-                }
+        if let Some(from) = original_message.from() {
+            if from.id == me.id {
+                is_reply_to_me = true;
             }
-            _ => {}
         }
 
         let username = me.username.as_deref().unwrap_or_default();
         let original_as_cmd = Command::parse(original_message.text().unwrap_or_default(), username);
 
         match original_as_cmd {
+            // If the message was a response to a command BUT both messages were not sent by the same user,
+            // then we don't want to handle it.
             Ok(_) if message.from() != original_message.from() => {
-                bot.send_message(message.chat.id, "😳").await?;
+                bot.send_message(chat_id, "😳").await?;
                 return Ok(());
             }
             Ok(Command::AddMessage(args)) => {
                 handlers::handle_add_message_reply(&bot, db, autoreply_set_map, &message, &args)
                     .await?;
-
                 return Ok(());
             }
             _ => {}
         }
     }
 
-    let chat_id = message.chat.id;
+    let chat_config = chat_config_map.get(chat_id).await?;
 
-    // If this is a sticker set without a set name, it is acccshually a WebP image sent as a sticker
     if let Some(sticker) = message.sticker() {
         if sticker.set_name.is_none() {
+            // If this is a sticker set without a set name, it is acccshually a WebP image sent as a sticker
             let sticker_file = bot
                 .get_file(&sticker.file_id)
                 .await
@@ -78,12 +78,29 @@ pub async fn handle_message(
                 .send()
                 .await
                 .context("Failed to send photo response")?;
+        } else {
+            // Only stickers with emoji (are there any without ??) are eligible for autoreply
+            if let Some(emoji) = &sticker.emoji {
+                let response_sticker = sticker_cache
+                    .update_and_get_response_sticker(chat_id, emoji, &sticker)
+                    .await
+                    .context("update_and_get_response_sticker")?;
+
+                match response_sticker {
+                    None => {}
+                    Some(reply_sticker) => {
+                        bot.send_sticker(chat_id, InputFile::file_id(reply_sticker.file_id))
+                            .await
+                            .context("Failed to send response sticker")?;
+                    }
+                }
+            }
         }
+
+        return Ok(());
     }
 
     let text = message.text().unwrap_or_default();
-
-    let chat_config = chat_config_map.get(chat_id).await?;
 
     let autoreply_set_map = autoreply_set_map.read().await;
     let autoreply_set = autoreply_set_map.get(&chat_id);
@@ -125,7 +142,7 @@ pub async fn handle_message(
     }
 
     if !reply_message.is_empty() {
-        bot.send_message(message.chat.id, reply_message).await?;
+        bot.send_message(chat_id, reply_message).await?;
     }
 
     Ok(())
