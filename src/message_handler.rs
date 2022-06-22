@@ -89,9 +89,13 @@ pub async fn handle_message(
                 match response_sticker {
                     None => {}
                     Some(reply_sticker) => {
-                        bot.send_sticker(chat_id, InputFile::file_id(reply_sticker.file_id))
-                            .await
-                            .context("Failed to send response sticker")?;
+                        let p: f64 = rand::random();
+
+                        if p < chat_config.autoreply_chance {
+                            bot.send_sticker(chat_id, InputFile::file_id(reply_sticker.file_id))
+                                .await
+                                .context("Failed to send response sticker")?;
+                        }
                     }
                 }
             }
