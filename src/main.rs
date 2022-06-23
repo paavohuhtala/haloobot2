@@ -48,6 +48,12 @@ pub enum Command {
     #[command(description = "Hae satunnainen Fingerpori")]
     Randompori,
 
+    #[command(description = "Hae uusin Fok_It")]
+    Fokit,
+
+    #[command(description = "Hae satunnainen Fok_It")]
+    RandomFokit,
+
     #[command(description = "im sorry jon")]
     Lasaga,
 

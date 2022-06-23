@@ -2,7 +2,9 @@ mod autoreply;
 mod config;
 mod dude_carpet;
 mod fingerpori;
+mod fokit;
 mod get_excuse;
+mod hs;
 mod lasaga;
 mod subscription;
 
@@ -11,6 +13,9 @@ pub use get_excuse::handle_get_excuse;
 
 pub use fingerpori::handle_fingerpori;
 pub use fingerpori::handle_randompori;
+
+pub use fokit::handle_fokit;
+pub use fokit::handle_random_fokit;
 
 pub use lasaga::handle_lasaga;
 pub use lasaga::handle_random_lasaga;

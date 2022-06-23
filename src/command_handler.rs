@@ -31,6 +31,12 @@ pub async fn handle_command(
         Command::Randompori => handlers::handle_randompori(&bot, chat_id)
             .await
             .context("handle_randompori"),
+        Command::Fokit => handlers::handle_fokit(&bot, chat_id)
+            .await
+            .context("handle_fokit"),
+        Command::RandomFokit => handlers::handle_random_fokit(&bot, chat_id)
+            .await
+            .context("handle_random_fokit"),
         Command::Lasaga => handlers::handle_lasaga(&bot, chat_id)
             .await
             .context("handle_lasaga"),
