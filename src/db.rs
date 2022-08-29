@@ -28,56 +28,7 @@ pub fn open_and_prepare_db() -> anyhow::Result<DatabaseRef> {
     let connection = Connection::open("haloo.db3").context("Failed to open SQLite database")?;
 
     connection
-        .execute_batch(
-            r#"
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY,
-        chat_id INTEGER NOT NULL,
-        date TEXT NOT NULL,
-        countdown_days INTEGER
-      );
-
-      CREATE TABLE IF NOT EXISTS subscription_types (
-        id TEXT NOT NULL PRIMARY KEY
-      );
-
-      INSERT INTO subscription_types (id) VALUES ('comics'), ('events')
-      ON CONFLICT DO NOTHING;
-
-      CREATE TABLE IF NOT EXISTS subscriptions (
-        subscription_type TEXT NOT NULL REFERENCES subscription_types(id),
-        chat_id INTEGER NOT NULL,
-        time TEXT NOT NULL,
-        last_updated TEXT,
-
-        PRIMARY KEY (chat_id, subscription_type)
-      );
-
-      CREATE TABLE IF NOT EXISTS autoreplies (
-        id INTEGER NOT NULL PRIMARY KEY,
-        chat_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        pattern_regex TEXT NOT NULL,
-        response_json TEXT NOT NULL,
-
-        UNIQUE (chat_id, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS chat_settings (
-        chat_id INTEGER NOT NULL PRIMARY KEY,
-        autoreply_chance REAL NOT NULL DEFAULT 0.5,
-        sticker_lru_size INTEGER NOT NULL DEFAULT 20
-      );
-
-      CREATE TABLE IF NOT EXISTS seen_stickers (
-        chat_id INTEGER NOT NULL,
-        emoji TEXT NOT NULL,
-        stickers_json TEXT NOT NULL,
-
-        UNIQUE (chat_id, emoji)
-      );
-    "#,
-        )
+        .execute_batch(include_str!("sql/create_db.sql"))
         .context("Failed to run database migrations")?;
 
     log::info!("Database prepared.");
@@ -98,7 +49,7 @@ impl DatabaseRef {
             ON CONFLICT DO UPDATE SET autoreply_chance = ?2
             ",
         )?
-        .execute(rusqlite::params![chat_id.0, chance])
+        .execute((chat_id.0, chance))
         .context("Failed to update autoreply chance")?;
 
         Ok(())
@@ -111,9 +62,8 @@ impl DatabaseRef {
             "SELECT autoreply_chance, sticker_lru_size FROM chat_settings WHERE chat_id = ?1",
         )?;
 
-        let mut maybe_row = statement.query_and_then::<_, anyhow::Error, _, _>(
-            rusqlite::params![chat_id.0],
-            |row| {
+        let mut maybe_row =
+            statement.query_and_then::<_, anyhow::Error, _, _>((chat_id.0,), |row| {
                 let autoreply_chance = row.get::<_, f64>(0)?;
                 let sticker_lru_size = row.get::<_, u32>(1)?;
 
@@ -122,8 +72,7 @@ impl DatabaseRef {
                     autoreply_chance,
                     sticker_lru_size,
                 })
-            },
-        )?;
+            })?;
 
         match maybe_row.next() {
             Some(row) => Ok(Some(row?)),
@@ -150,7 +99,7 @@ impl DatabaseRef {
         )?;
 
         let rows: Vec<Subscription> = statement
-            .query(rusqlite::params![formatted_time])
+            .query((formatted_time,))
             .context("Failed to query database")?
             .mapped(|row| {
                 let chat_id: i64 = row.get(0)?;
@@ -209,7 +158,7 @@ impl DatabaseRef {
                 SET last_updated = ?3
                 WHERE chat_id = ?1 AND subscription_type = ?2
             ",
-            rusqlite::params![chat_id, subscription_type, formatted_time],
+            (chat_id, subscription_type, formatted_time),
         )
         .context("Failed to update subscription timestamp")?;
 
@@ -224,11 +173,11 @@ impl DatabaseRef {
             INSERT INTO subscriptions (chat_id, subscription_type, time) VALUES (?1, ?2, ?3)
             ON CONFLICT (chat_id, subscription_type) DO UPDATE SET time = ?3
         ",
-            rusqlite::params![
+            (
                 subscription.chat_id.0,
                 subscription.kind.as_str(),
                 subscription.time.format(TIME_FORMAT).to_string().as_str(),
-            ],
+            ),
         )?;
 
         Ok(())
@@ -242,12 +191,12 @@ impl DatabaseRef {
             INSERT INTO autoreplies (chat_id, name, pattern_regex, response_json) VALUES (?1, ?2, ?3, ?4)
             ON CONFLICT (chat_id, name) DO UPDATE SET pattern_regex = ?3, response_json = ?4
         ",
-            rusqlite::params![
+            (
                 autoreply.chat_id.0,
-                autoreply.name,
+                &autoreply.name,
                 autoreply.pattern_regex.as_str(),
                 serde_json::to_string(&autoreply.response).unwrap(),
-            ],
+            ),
         )?;
 
         Ok(())
@@ -263,9 +212,7 @@ impl DatabaseRef {
         ",
         )?;
 
-        let rows = statement
-            .query(rusqlite::params![])
-            .context("Failed to query database")?;
+        let rows = statement.query(()).context("Failed to query database")?;
 
         let mapped_rows = rows
             .mapped(|row| {
@@ -331,7 +278,7 @@ impl DatabaseRef {
         let stickers_json = serde_json::to_string(stickers).unwrap();
 
         statement
-            .execute(rusqlite::params![chat_id, emoji, stickers_json])
+            .execute((chat_id, emoji, stickers_json))
             .context("Failed to update seen stickers")?;
 
         Ok(())
@@ -349,7 +296,7 @@ impl DatabaseRef {
         )?;
 
         let rows = statement
-            .query(rusqlite::params![chat_id.0])
+            .query((chat_id.0,))
             .context("Failed to query database")?;
 
         let emoji_sticker_map: HashMap<String, StickersForEmoji> = rows
