@@ -27,3 +27,7 @@ pub use autoreply::handle_add_message_reply;
 
 mod config;
 pub use config::handle_set_autoreply_chance;
+
+mod google;
+pub use google::handle_finish_google_auth;
+pub use google::handle_start_google_auth;

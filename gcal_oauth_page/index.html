@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset='utf-8'>
+  <title>Haloobot2 OAuth success(?)</title>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <style>
+    p {
+      font-size: 18px;
+    }
+
+    h1 {
+      font-family: "Comic Sans MS";
+    }
+
+    code {
+      display: block;
+
+      padding: 16px;
+      margin-top: 32px;
+      background-color: #eee;
+    }
+
+    .signature {
+      white-space: pre;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Haloobot2 OAuth complete!</h1>
+  <p>Please send this to haloobot2 in a private message to provide access to your calendars 😎:</p>
+  <code>
+    /finishgoogleauth <span id="code"></span> <span id="state"></span>
+  </code>
+
+  <p class="signature">Best regards,<br>haloobot2</p>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    document.getElementById("code").innerHTML = code;
+    document.getElementById("state").innerHTML = state;
+  </script>
+</body>
+
+</html>

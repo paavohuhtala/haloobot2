@@ -4,6 +4,7 @@ use anyhow::Context;
 use autoreplies::AutoreplySet;
 use chrono::{DateTime, Utc};
 use command_handler::handle_command;
+use google::GoogleCalendarClientFactory;
 use message_handler::handle_message;
 use teloxide::{
     dispatching::{UpdateFilterExt, UpdateHandler},
@@ -17,6 +18,7 @@ use crate::{
     autoreplies::{create_autoreply_set_map, StickerCache},
     chat_config::ChatConfigModel,
     db::open_and_prepare_db,
+    google::GoogleCalendarClientFactoryState,
     scheduler::scheduled_event_handler,
 };
 
@@ -25,12 +27,13 @@ mod autoreplies;
 mod chat_config;
 mod command_handler;
 mod db;
+mod google;
 mod handlers;
 mod message_handler;
 mod scheduler;
 mod subscriptions;
 
-#[derive(BotCommands, Clone)]
+#[derive(BotCommands, Clone, Debug)]
 #[command(rename = "lowercase", description = "Tuetut komennot:")]
 pub enum Command {
     #[command(description = "Miksi härveli ei toimi?")]
@@ -68,6 +71,14 @@ pub enum Command {
 
     #[command(description = "Aseta automaattisen vastauksen todennäköisyys")]
     SetAutoreplyChance(f64),
+
+    #[command(
+        description = "Anna pääsy kaikkiin henkilötietoihisi (oikeesti vaan google kalentereihin bro)"
+    )]
+    StartGoogleAuth,
+
+    #[command(description = "Myy sielusi", parse_with = "split")]
+    FinishGoogleAuth { code: String, state: String },
 }
 
 fn handler(start_time: DateTime<Utc>) -> UpdateHandler<anyhow::Error> {
@@ -100,6 +111,26 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Commands registered & Telegram connection established.");
 
+    let gcal_id = std::env::var("GOOGLE_CALENDAR_CLIENT_ID").ok();
+    let gcal_secret = std::env::var("GOOGLE_CALENDAR_CLIENT_SECRET").ok();
+    let gcal_redirect_uri = std::env::var("GOOGLE_CALENDAR_REDIRECT_URI").ok();
+
+    let gcal_client_factory: GoogleCalendarClientFactory =
+        if let (Some(gcal_id), Some(gcal_secret), Some(gcal_redirect_uri)) =
+            (gcal_id, gcal_secret, gcal_redirect_uri)
+        {
+            log::info!("Google Calendar integration configured.");
+
+            Arc::new(Some(GoogleCalendarClientFactoryState::new(
+                gcal_id,
+                gcal_secret,
+                gcal_redirect_uri,
+            )))
+        } else {
+            log::info!("Google Calendar integration config missing, skipping initialization.");
+            Arc::new(None)
+        };
+
     // https://github.com/teloxide/teloxide/blob/86657f55ffa1f10baa18a6fdca2c72c30db33519/src/dispatching/repls/commands_repl.rs#L82
     let ignore_update = |_upd| Box::pin(async {});
 
@@ -115,7 +146,8 @@ async fn main() -> anyhow::Result<()> {
             db.clone(),
             autoreply_set_map,
             chat_config_map,
-            sticker_cache
+            sticker_cache,
+            gcal_client_factory
         ])
         .enable_ctrlc_handler()
         .build();

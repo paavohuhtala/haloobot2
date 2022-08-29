@@ -4,7 +4,8 @@ use anyhow::Context;
 use teloxide::{prelude::*, utils::command::BotCommands};
 
 use crate::{
-    autoreplies::AutoreplySetMap, chat_config::ChatConfigModel, db::DatabaseRef, handlers, Command,
+    autoreplies::AutoreplySetMap, chat_config::ChatConfigModel, db::DatabaseRef,
+    google::GoogleCalendarClientFactory, handlers, Command,
 };
 
 pub async fn handle_command(
@@ -14,6 +15,7 @@ pub async fn handle_command(
     db: DatabaseRef,
     autoreply_set_map: AutoreplySetMap,
     chat_config_map: Arc<ChatConfigModel>,
+    google_calendar_client_factory: GoogleCalendarClientFactory,
 ) -> anyhow::Result<()> {
     let chat_id = message.chat.id;
 
@@ -58,6 +60,22 @@ pub async fn handle_command(
                 .await
                 .context("handle_set_autoreply_chance")
         }
+        Command::StartGoogleAuth => handlers::handle_start_google_auth(
+            &bot,
+            message,
+            google_calendar_client_factory.clone(),
+        )
+        .await
+        .context("handle_start_google_auth"),
+        Command::FinishGoogleAuth { code, state } => handlers::handle_finish_google_auth(
+            &bot,
+            message,
+            google_calendar_client_factory.clone(),
+            code,
+            state,
+        )
+        .await
+        .context("handle_finish_google_auth"),
     };
 
     match result {
