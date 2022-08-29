@@ -6,23 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.57"
-chrono = "0.4.19"
+anyhow = "1.0.61"
+chrono = "0.4.22"
 dashmap = "5.3.4"
 dotenv = "0.15.0"
 futures = "0.3.21"
-image = "0.24.2"
+image = "0.24.3"
 itertools = "0.10.3"
 log = "0.4.17"
 multimap = "0.8.3"
 nom = "7.1.1"
 pretty_env_logger = "0.4.0"
 rand = "0.8.5"
-regex = "1.5.6"
-reqwest = "0.11.10"
-rusqlite = { version = "0.27.0", features = ["chrono", "bundled", "serde_json"] }
+regex = "1.6.0"
+reqwest = "0.11.11"
+rusqlite = { version = "0.28.0", features = ["chrono", "bundled", "serde_json"] }
 scraper = "0.13.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-teloxide = { version = "0.9.1", features = ["macros", "auto-send", "ctrlc_handler"] }
-tokio = { version = "1.8", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1.0.143", features = ["derive"] }
+serde_json = "1.0.83"
+teloxide = { version = "0.10.1", features = ["macros", "auto-send", "ctrlc_handler"] }
+tokio = { version = "1.20.1", features = ["rt-multi-thread", "macros"] }

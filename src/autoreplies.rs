@@ -230,7 +230,7 @@ impl StickerCache {
 
         let sticker = cache_entry
             .select_sticker_and_update(lru_size, emoji, posted_sticker)
-            .map(|sticker| sticker.clone());
+            .cloned();
 
         let stickers_for_emoji = cache_entry
             .by_emoji

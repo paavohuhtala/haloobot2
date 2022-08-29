@@ -117,10 +117,11 @@ async fn main() -> anyhow::Result<()> {
             chat_config_map,
             sticker_cache
         ])
+        .enable_ctrlc_handler()
         .build();
 
     let (_, event_handler_result) = futures::join!(
-        dispatcher.setup_ctrlc_handler().dispatch(),
+        dispatcher.dispatch(),
         scheduled_event_handler(bot, db.clone())
     );
 

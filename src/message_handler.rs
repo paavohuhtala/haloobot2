@@ -82,7 +82,7 @@ pub async fn handle_message(
             // Only stickers with emoji (are there any without ??) are eligible for autoreply
             if let Some(emoji) = &sticker.emoji {
                 let response_sticker = sticker_cache
-                    .update_and_get_response_sticker(chat_id, emoji, &sticker)
+                    .update_and_get_response_sticker(chat_id, emoji, sticker)
                     .await
                     .context("update_and_get_response_sticker")?;
 
