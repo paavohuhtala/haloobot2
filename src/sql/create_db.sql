@@ -44,3 +44,15 @@ CREATE TABLE IF NOT EXISTS seen_stickers (
 
   UNIQUE (chat_id, emoji)
 );
+
+CREATE TABLE IF NOT EXISTS google_logins (
+  user_id INTEGER NOT NULL PRIMARY KEY,
+  refresh_token TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS connected_calendars (
+  -- Only one calendar can be connected per chat
+  chat_id INTEGER NOT NULL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  calendar_id TEXT NOT NULL
+);

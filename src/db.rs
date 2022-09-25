@@ -8,7 +8,7 @@ use anyhow::Context;
 use chrono::{DateTime, Local, NaiveTime};
 use regex::Regex;
 use rusqlite::Connection;
-use teloxide::types::ChatId;
+use teloxide::types::{ChatId, UserId};
 use tokio::sync::Mutex;
 
 use crate::{
@@ -333,5 +333,97 @@ impl DatabaseRef {
         let cache = ChatStickerCache::new(emoji_sticker_map);
 
         Ok(cache)
+    }
+
+    pub async fn set_user_google_refresh_token(
+        &self,
+        user_id: UserId,
+        refresh_token: &str,
+    ) -> anyhow::Result<()> {
+        let db = self.0.lock().await;
+
+        db.0.execute(
+            "
+            INSERT INTO google_logins (user_id, refresh_token) VALUES (?1, ?2)
+            ON CONFLICT (user_id) DO UPDATE SET refresh_token = ?2
+        ",
+            (user_id.0, refresh_token),
+        )?;
+
+        Ok(())
+    }
+
+    pub async fn get_user_google_refresh_token(
+        &self,
+        user_id: UserId,
+    ) -> anyhow::Result<Option<String>> {
+        let db = self.0.lock().await;
+
+        let mut statement = db.0.prepare(
+            "
+            SELECT refresh_token
+            FROM google_logins
+            WHERE user_id = ?1
+        ",
+        )?;
+
+        let rows = statement
+            .query((user_id.0,))
+            .context("Failed to query database")?;
+
+        let maybe_row = rows
+            .mapped(|row| {
+                let refresh_token: String = row.get(0)?;
+
+                Ok(refresh_token)
+            })
+            .find_map(|row| match row {
+                Err(err) => {
+                    log::error!("Failed to read google access token row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            });
+
+        Ok(maybe_row)
+    }
+
+    pub async fn add_connected_calendar(
+        &self,
+        chat_id: ChatId,
+        user_id: UserId,
+        calendar_id: &str,
+    ) -> anyhow::Result<()> {
+        let db = self.0.lock().await;
+
+        db.0.execute(
+            "
+            INSERT INTO connected_calendars (chat_id, user_id, calendar_id)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT (chat_id) DO UPDATE
+            SET user_id = ?2, calendar_id = ?3
+        ",
+            (chat_id.0, user_id.0, calendar_id),
+        )?;
+
+        Ok(())
+    }
+
+    pub async fn remove_connected_calendar(
+        &self,
+        chat_id: ChatId,
+        user_id: UserId,
+    ) -> anyhow::Result<()> {
+        let db = self.0.lock().await;
+
+        db.0.execute(
+            "
+            DELETE FROM connected_calendars
+            WHERE chat_id = ?1 AND user_id = ?2
+        ",
+            (chat_id.0, user_id.0),
+        )?;
+
+        Ok(())
     }
 }

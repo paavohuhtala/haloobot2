@@ -73,9 +73,24 @@ pub async fn handle_command(
             google_calendar_client_factory.clone(),
             code,
             state,
+            db,
         )
         .await
         .context("handle_finish_google_auth"),
+        Command::ConnectGoogleCalendar(calendar_id) => handlers::connect_google_calendar(
+            &bot,
+            message,
+            google_calendar_client_factory.clone(),
+            db,
+            calendar_id,
+        )
+        .await
+        .context("connect_google_calendar"),
+        Command::DisconnectGoogleCalendar => {
+            handlers::disconnect_google_calendar(&bot, message, db)
+                .await
+                .context("disconnect_google_calendar")
+        }
     };
 
     match result {

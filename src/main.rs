@@ -79,6 +79,12 @@ pub enum Command {
 
     #[command(description = "Myy sielusi", parse_with = "split")]
     FinishGoogleAuth { code: String, state: String },
+
+    #[command(description = "Kytke Google-kalenteri kanavaan")]
+    ConnectGoogleCalendar(String),
+
+    #[command(description = "Poista Google-kalenteri kanavalta")]
+    DisconnectGoogleCalendar,
 }
 
 fn handler(start_time: DateTime<Utc>) -> UpdateHandler<anyhow::Error> {
@@ -125,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
                 gcal_id,
                 gcal_secret,
                 gcal_redirect_uri,
+                db.clone(),
             )))
         } else {
             log::info!("Google Calendar integration config missing, skipping initialization.");
