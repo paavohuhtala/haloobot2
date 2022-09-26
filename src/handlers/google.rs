@@ -3,34 +3,44 @@ use chrono::Local;
 use teloxide::{prelude::*, types::ParseMode};
 
 use crate::{
+    command_handler::{fail, succeed, succeed_with_message, HandlerError, HandlerResult},
     db::DatabaseRef,
-    google::{get_events_to_announce, EventExt, GoogleCalendarClientFactory, UpcomingEvent},
+    google::{
+        get_events_to_announce, EventExt, GoogleCalendarClientFactory,
+        GoogleCalendarClientFactoryState, UpcomingEvent,
+    },
     telegram_utils::telegram_escape,
 };
 
+fn get_google_calendar_client_factory<'a>(
+    shared_factory: &'a GoogleCalendarClientFactory,
+) -> Result<&'a GoogleCalendarClientFactoryState, HandlerError> {
+    match shared_factory.as_ref() {
+        None => fail("Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin."),
+        Some(client_factory) => Ok(client_factory),
+    }
+}
+
+async fn get_google_calendar_client_for_user(
+    factory: &GoogleCalendarClientFactoryState,
+    user_id: UserId,
+) -> Result<google_calendar::Client, HandlerError> {
+    let client = factory.create_client_for_user(user_id).await?;
+    match client {
+        None => fail("Et ole vielä Google-tunnistautunut. Käytä /startgoogleauth -komentoa."),
+        Some(client) => Ok(client),
+    }
+}
+
 pub async fn handle_start_google_auth(
-    bot: &AutoSend<Bot>,
     message: Message,
     google_calendar_client_factory: GoogleCalendarClientFactory,
-) -> anyhow::Result<()> {
-    let chat_id = message.chat.id;
-
-    let google_calendar_client_factory = match google_calendar_client_factory.as_ref() {
-        None => {
-            bot.send_message(
-                chat_id,
-                "Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin.",
-            )
-            .await?;
-            return Ok(());
-        }
-        Some(client_factory) => client_factory,
-    };
+) -> HandlerResult {
+    let google_calendar_client_factory =
+        get_google_calendar_client_factory(&google_calendar_client_factory)?;
 
     if !message.chat.is_private() {
-        bot.send_message(message.chat.id, "Hoidetaan tää privassa jookos 🥺👉👈")
-            .await?;
-        return Ok(());
+        return fail("Hoidetaan tää privassa jookos 🥺👉👈");
     }
 
     let user_id = message
@@ -44,12 +54,7 @@ pub async fn handle_start_google_auth(
     {
         Some(client) => match client.refresh_access_token().await {
             Ok(_) => {
-                bot.send_message(
-                    chat_id,
-                    "Olet jo kirjautunut sisään Google-kalenteriin, veliseni.",
-                )
-                .await?;
-                return Ok(());
+                return fail("Olet jo kirjautunut sisään Google-kalenteriin, veliseni.");
             }
             Err(_) => {}
         },
@@ -61,41 +66,23 @@ pub async fn handle_start_google_auth(
     let consent_url =
         client.user_consent_url(&[String::from("https://www.googleapis.com/auth/calendar")]);
 
-    bot.send_message(message.chat.id, format!("Menes {consent_url} 👈 tonne"))
-        .await?;
-
-    Ok(())
+    succeed_with_message(format!("Menes {consent_url} 👈 tonne"))
 }
 
 pub async fn handle_finish_google_auth(
-    bot: &AutoSend<Bot>,
     message: Message,
     google_calendar_client_factory: GoogleCalendarClientFactory,
     code: String,
     state: String,
     db: DatabaseRef,
-) -> anyhow::Result<()> {
-    let google_calendar_client_factory = match google_calendar_client_factory.as_ref() {
-        None => {
-            bot.send_message(
-                message.chat.id,
-                "Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin.",
-            )
-            .await?;
-            return Ok(());
-        }
-        Some(client_factory) => client_factory,
-    };
+) -> HandlerResult {
+    let google_calendar_client_factory =
+        get_google_calendar_client_factory(&google_calendar_client_factory)?;
 
     let mut client = google_calendar_client_factory.create_client();
 
     if !message.chat.is_private() {
-        bot.send_message(
-            message.chat.id,
-            "hupsista keikkaa :D ei kantsis postaa tota julkisesti :D",
-        )
-        .await?;
-        return Ok(());
+        return fail("hupsista keikkaa :D ei kantsis postaa tota julkisesti :D");
     }
 
     let sender = message
@@ -113,84 +100,47 @@ pub async fn handle_finish_google_auth(
     db.set_user_google_refresh_token(sender.id, &access_token.refresh_token)
         .await?;
 
-    bot.send_message(message.chat.id, format!("Kohtalosi on sinetöity. 👌"))
-        .await?;
-
-    Ok(())
+    succeed_with_message("Kohtalosi on sinetöity. 👌")
 }
 
 pub async fn connect_google_calendar(
-    bot: &AutoSend<Bot>,
     message: Message,
     google_calendar_client_factory: GoogleCalendarClientFactory,
     db: DatabaseRef,
     calendar_id: String,
-) -> anyhow::Result<()> {
-    let google_calendar_client_factory = match google_calendar_client_factory.as_ref() {
-        None => {
-            bot.send_message(
-                message.chat.id,
-                "Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin.",
-            )
-            .await?;
-            return Ok(());
-        }
-        Some(client_factory) => client_factory,
-    };
+) -> HandlerResult {
+    let google_calendar_client_factory =
+        get_google_calendar_client_factory(&google_calendar_client_factory)?;
 
     let sender = message
         .from()
         .context("Expected message to have a sender")?;
 
-    let client = google_calendar_client_factory
-        .create_client_for_user(sender.id)
-        .await?;
-
-    let client = match client {
-        None => {
-            bot.send_message(
-                message.chat.id,
-                "Et ole vielä Google-tunnistautunut. Käytä /startgoogleauth -komentoa.",
-            )
-            .await?;
-            return Ok(());
-        }
-        Some(client) => client,
-    };
+    let client =
+        get_google_calendar_client_for_user(google_calendar_client_factory, sender.id).await?;
 
     let calendar = match client.calendars().get(&calendar_id).await {
         Ok(calendar) => calendar,
         Err(err) => {
-            bot.send_message(
-                message.chat.id,
-                format!("Kalenteria {} ei löytynyt. Virhe: {}", calendar_id, err),
-            )
-            .await?;
             log::error!("Error while getting calendar: {}", err);
-            return Ok(());
+
+            return fail(format!(
+                "Kalenteria {} ei löytynyt. Virhe: {}",
+                calendar_id, err
+            ));
         }
     };
 
     db.add_connected_calendar(message.chat.id, sender.id, &calendar.id)
         .await?;
 
-    bot.send_message(
-        message.chat.id,
-        format!(
-            "Jipii, jihuu! Kalenteri {} on kytketty kanavaan.",
-            calendar.summary
-        ),
-    )
-    .await?;
-
-    Ok(())
+    succeed_with_message(format!(
+        "Jipii, jihuu! Kalenteri {} on kytketty kanavaan.",
+        calendar.summary
+    ))
 }
 
-pub async fn disconnect_google_calendar(
-    bot: &AutoSend<Bot>,
-    message: Message,
-    db: DatabaseRef,
-) -> anyhow::Result<()> {
+pub async fn disconnect_google_calendar(message: Message, db: DatabaseRef) -> HandlerResult {
     let sender = message
         .from()
         .context("Expected message to have a sender")?;
@@ -198,13 +148,7 @@ pub async fn disconnect_google_calendar(
     db.remove_connected_calendar(message.chat.id, sender.id)
         .await?;
 
-    bot.send_message(
-        message.chat.id,
-        "Kytkemäsi kalenteri on irrotettu kanavalta.",
-    )
-    .await?;
-
-    Ok(())
+    succeed_with_message("Kytkemäsi kalenteri on irrotettu kanavalta.")
 }
 
 pub async fn print_calendar_events(
@@ -212,31 +156,17 @@ pub async fn print_calendar_events(
     message: Message,
     db: DatabaseRef,
     google_calendar_client_factory: GoogleCalendarClientFactory,
-) -> anyhow::Result<()> {
+) -> HandlerResult {
     let chat_id = message.chat.id;
 
-    let google_calendar_client_factory = match google_calendar_client_factory.as_ref() {
-        None => {
-            bot.send_message(
-                chat_id,
-                "Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin.",
-            )
-            .await?;
-            return Ok(());
-        }
-        Some(client_factory) => client_factory,
-    };
+    let google_calendar_client_factory =
+        get_google_calendar_client_factory(&google_calendar_client_factory)?;
 
     let calendar_id = db.get_connected_calendar_id(chat_id).await?;
 
     let calendar_id = match calendar_id {
         None => {
-            bot.send_message(
-                chat_id,
-                "Tätä kanavaa ei ole kytketty mihinkään kalenteriin. Käytä /connectgooglecalendar -komentoa.",
-            )
-            .await?;
-            return Ok(());
+            return fail("Tätä kanavaa ei ole kytketty mihinkään kalenteriin. Käytä /connectgooglecalendar -komentoa.");
         }
         Some(calendar_id) => calendar_id,
     };
@@ -245,19 +175,14 @@ pub async fn print_calendar_events(
         .from()
         .context("Expected message to have a sender")?;
 
-    let client = google_calendar_client_factory
-        .create_client_for_user(sender.id)
-        .await?
-        // TODO handle
-        .expect("Expected user to have a Google client");
+    let client =
+        get_google_calendar_client_for_user(google_calendar_client_factory, sender.id).await?;
 
     let now = Local::now();
     let events_summary = get_events_to_announce(&client, &calendar_id, now).await?;
 
     if events_summary.today.is_empty() && events_summary.upcoming.is_empty() {
-        bot.send_message(chat_id, "Ei tulevia tapahtumia kalenterissa. 😔")
-            .await?;
-        return Ok(());
+        return succeed_with_message("Ei tulevia tapahtumia kalenterissa. 😔");
     }
 
     let mut message = String::new();
@@ -305,5 +230,5 @@ pub async fn print_calendar_events(
         .parse_mode(ParseMode::MarkdownV2)
         .await?;
 
-    Ok(())
+    succeed()
 }

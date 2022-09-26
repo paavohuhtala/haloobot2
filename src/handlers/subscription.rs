@@ -1,32 +1,26 @@
 use std::str::FromStr;
 
 use chrono::NaiveTime;
-use teloxide::{adaptors::AutoSend, prelude::Requester, types::ChatId, Bot};
+use teloxide::types::ChatId;
 
 use crate::{
+    command_handler::{fail, succeed_with_message, HandlerResult},
     db::DatabaseRef,
     subscriptions::{Subscription, SubscriptionType, TIME_FORMAT},
 };
 
 pub async fn handle_subscribe(
-    bot: &AutoSend<Bot>,
     chat_id: ChatId,
     db: DatabaseRef,
     subscription_type: &str,
     time: &str,
-) -> anyhow::Result<()> {
+) -> HandlerResult {
     let kind = SubscriptionType::from_str(subscription_type);
 
     let kind = match kind {
         Ok(kind) => kind,
         Err(_) => {
-            bot.send_message(
-                chat_id,
-                "Epäkelpo tilauksen tyyppi. Käytä jokin seuraavista: comics, events",
-            )
-            .await?;
-
-            return Ok(());
+            return fail("Epäkelpo tilauksen tyyppi. Käytä jokin seuraavista: comics, events");
         }
     };
 
@@ -35,10 +29,7 @@ pub async fn handle_subscribe(
     let time = match time {
         Ok(time) => time,
         Err(_) => {
-            bot.send_message(chat_id, "Epäkelpo ajankohta. Käytä muotoa HH:MM")
-                .await?;
-
-            return Ok(());
+            return fail("Epäkelpo ajankohta. Käytä muotoa HH:MM");
         }
     };
 
@@ -52,15 +43,9 @@ pub async fn handle_subscribe(
 
     log::info!("Added subscription: {:?}", subscription);
 
-    bot.send_message(
-        chat_id,
-        format!(
-            "🎉 Lisätty tilaus {}, päivittäin kello {}",
-            kind.as_str(),
-            time.format(TIME_FORMAT)
-        ),
-    )
-    .await?;
-
-    Ok(())
+    succeed_with_message(format!(
+        "🎉 Lisätty tilaus {}, päivittäin kello {}",
+        kind.as_str(),
+        time.format(TIME_FORMAT)
+    ))
 }

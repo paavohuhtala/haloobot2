@@ -1,13 +1,14 @@
 use anyhow::Context;
 use serde::Deserialize;
-use teloxide::prelude::*;
+
+use crate::command_handler::{succeed_with_message, HandlerResult};
 
 #[derive(Deserialize, Debug)]
 struct ExcuseResponse {
     excuse: String,
 }
 
-pub async fn handle_get_excuse(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
+pub async fn handle_get_excuse() -> HandlerResult {
     let response = reqwest::get("http://ohjelmointitekosyyt.fi/.netlify/functions/excuse")
         .await
         .context("Failed to fetch")?;
@@ -17,7 +18,5 @@ pub async fn handle_get_excuse(bot: &AutoSend<Bot>, message: &Message) -> anyhow
         .await
         .context("Failed to parse JSON")?;
 
-    bot.send_message(message.chat.id, excuse).await?;
-
-    Ok(())
+    succeed_with_message(excuse)
 }

@@ -1,5 +1,7 @@
 use teloxide::prelude::*;
 
+use crate::command_handler::{succeed, HandlerResult};
+
 use super::hs::{get_latest_cartoon, get_random_cartoon, HsCartoonExtractor};
 
 struct Fingerpori;
@@ -13,14 +15,14 @@ impl HsCartoonExtractor for Fingerpori {
     const PAGES: u32 = 480;
 }
 
-pub async fn handle_fingerpori(bot: &AutoSend<Bot>, chat_id: ChatId) -> anyhow::Result<()> {
+pub async fn handle_fingerpori(bot: &AutoSend<Bot>, chat_id: ChatId) -> HandlerResult {
     let photo = get_latest_cartoon::<Fingerpori>().await?;
     bot.send_photo(chat_id, photo).await?;
-    Ok(())
+    succeed()
 }
 
-pub async fn handle_randompori(bot: &AutoSend<Bot>, chat_id: ChatId) -> anyhow::Result<()> {
+pub async fn handle_randompori(bot: &AutoSend<Bot>, chat_id: ChatId) -> HandlerResult {
     let photo = get_random_cartoon::<Fingerpori>().await?;
     bot.send_photo(chat_id, photo).await?;
-    Ok(())
+    succeed()
 }

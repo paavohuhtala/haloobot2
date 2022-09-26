@@ -1,6 +1,7 @@
 use anyhow::Context;
 use scraper::{Html, Selector};
-use teloxide::prelude::*;
+
+use crate::command_handler::{succeed_with_message, HandlerResult};
 
 fn parse_dude_carpet(body: &str) -> anyhow::Result<String> {
     let document = Html::parse_document(body);
@@ -17,7 +18,7 @@ fn parse_dude_carpet(body: &str) -> anyhow::Result<String> {
     Ok(text.to_string())
 }
 
-pub async fn handle_dude_carpet(bot: &AutoSend<Bot>, message: &Message) -> anyhow::Result<()> {
+pub async fn handle_dude_carpet() -> HandlerResult {
     let response = reqwest::get("https://aijamatto.herokuapp.com/")
         .await
         .context("Failed to fetch")?;
@@ -25,7 +26,5 @@ pub async fn handle_dude_carpet(bot: &AutoSend<Bot>, message: &Message) -> anyho
     let body = response.text().await.context("Failed to fetch (body)")?;
     let text = parse_dude_carpet(&body).context("Failed to parse dude carpet")?;
 
-    bot.send_message(message.chat.id, text).await?;
-
-    Ok(())
+    succeed_with_message(text)
 }

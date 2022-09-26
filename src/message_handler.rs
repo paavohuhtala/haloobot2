@@ -48,8 +48,7 @@ pub async fn handle_message(
                 return Ok(());
             }
             Ok(Command::AddMessage(args)) => {
-                handlers::handle_add_message_reply(&bot, db, autoreply_set_map, &message, &args)
-                    .await?;
+                handlers::handle_add_message_reply(db, autoreply_set_map, &message, &args).await?;
                 return Ok(());
             }
             _ => {}

@@ -1,64 +1,45 @@
 use regex::Regex;
-use teloxide::{
-    adaptors::AutoSend,
-    prelude::Requester,
-    types::{ChatId, Message},
-    Bot,
-};
+use teloxide::types::{ChatId, Message};
 
 use crate::{
     argument_parser::parse_arguments,
     autoreplies::{Autoreply, AutoreplyResponse, AutoreplySet, AutoreplySetMap},
+    command_handler::{fail, succeed, succeed_with_message, HandlerError, HandlerResult},
     db::DatabaseRef,
 };
 
 pub async fn handle_add_message(
-    bot: &AutoSend<Bot>,
     chat_id: ChatId,
     db: DatabaseRef,
     autoreply_set_map: AutoreplySetMap,
     args: &str,
-) -> anyhow::Result<()> {
+) -> HandlerResult {
     let args = parse_arguments(args);
 
     match args {
         Err(err) => {
-            bot.send_message(
-                chat_id,
-                format!("Parametrien parsinta epäonnistui: {}", err),
-            )
-            .await?;
-
-            return Ok(());
+            return fail(format!("Parametrien parsinta epäonnistui: {}", err));
         }
         Ok((_, args)) => {
             if args.len() == 2 {
-                bot.send_message(
-                    chat_id,
+                return succeed_with_message(
                     "👀 Lähetä haluttu viesti tai tarra vastauksena alkuperäiseen komentoon.",
-                )
-                .await?;
-
-                return Ok(());
+                );
             }
 
             if args.len() != 3 {
-                bot.send_message(
-                    chat_id,
+                return fail(
                     "Parametrien määrä väärin. Käytä muotoa: /addmessage <nimi> <regex> <viesti>",
-                )
-                .await?;
-
-                return Ok(());
+                );
             }
 
             let name = &args[0];
-            let pattern_regex = parse_regex(&args, bot, chat_id).await?;
+            let pattern_regex = parse_regex(&args)?;
 
             let pattern_regex = match pattern_regex {
                 Some(regex) => regex,
                 None => {
-                    return Ok(());
+                    return succeed();
                 }
             };
 
@@ -70,51 +51,41 @@ pub async fn handle_add_message(
                 pattern_regex,
                 db,
                 autoreply_set_map,
-                bot,
                 AutoreplyResponse::Literal(response.to_string()),
             )
             .await?;
         }
     }
 
-    Ok(())
+    succeed()
 }
 
 pub async fn handle_add_message_reply(
-    bot: &AutoSend<Bot>,
     db: DatabaseRef,
     autoreply_set_map: AutoreplySetMap,
     message: &Message,
     previous_args: &str,
-) -> anyhow::Result<()> {
+) -> HandlerResult {
     let previous_args = parse_arguments(previous_args);
     let chat_id = message.chat.id;
 
     match previous_args {
-        Err(err) => {
-            bot.send_message(
-                chat_id,
-                format!("Komennon parametrien parsinta epäonnistui: {}", err),
-            )
-            .await?;
-
-            return Ok(());
-        }
+        Err(err) => fail(format!(
+            "Komennon parametrien parsinta epäonnistui: {}",
+            err
+        )),
         Ok((_, args)) => {
             if args.len() != 2 {
-                bot.send_message(chat_id, "Parametrien määrä väärin.")
-                    .await?;
-
-                return Ok(());
+                return fail("Parametrien määrä väärin.");
             }
 
             let name = &args[0];
-            let pattern_regex = parse_regex(&args, bot, chat_id).await?;
+            let pattern_regex = parse_regex(&args)?;
 
             let pattern_regex = match pattern_regex {
                 Some(regex) => regex,
                 None => {
-                    return Ok(());
+                    return succeed();
                 }
             };
 
@@ -135,14 +106,11 @@ pub async fn handle_add_message_reply(
                 pattern_regex,
                 db,
                 autoreply_set_map,
-                bot,
                 response,
             )
-            .await?;
+            .await
         }
     }
-
-    Ok(())
 }
 
 async fn add_message(
@@ -153,9 +121,8 @@ async fn add_message(
     autoreply_set_map: std::sync::Arc<
         tokio::sync::RwLock<std::collections::HashMap<ChatId, AutoreplySet>>,
     >,
-    bot: &AutoSend<Bot>,
     response: AutoreplyResponse,
-) -> Result<(), anyhow::Error> {
+) -> HandlerResult {
     let autoreply = Autoreply {
         chat_id,
         name: name.to_string(),
@@ -168,30 +135,16 @@ async fn add_message(
         .entry(chat_id)
         .or_insert_with(AutoreplySet::empty)
         .add_autoreply(autoreply);
-    bot.send_message(
-        chat_id,
-        format!("🎉 Lisätty automaattinen vastaus {}", name),
-    )
-    .await?;
-    Ok(())
+
+    succeed_with_message(format!("🎉 Lisätty automaattinen vastaus {}", name))
 }
 
-async fn parse_regex<'a>(
-    args: &[std::borrow::Cow<'a, str>],
-    bot: &AutoSend<Bot>,
-    chat_id: ChatId,
-) -> Result<Option<Regex>, anyhow::Error> {
+fn parse_regex<'a>(args: &[std::borrow::Cow<'a, str>]) -> Result<Option<Regex>, HandlerError> {
     let pattern_regex = Regex::new(&*args[1]);
     let pattern_regex = match pattern_regex {
         Ok(regex) => regex,
         Err(err) => {
-            bot.send_message(
-                chat_id,
-                format!("Regex-lausekkeen parsinta epäonnistui: {}", err),
-            )
-            .await?;
-
-            return Ok(None);
+            return fail(format!("Regex-lausekkeen parsinta epäonnistui: {}", err));
         }
     };
     Ok(Some(pattern_regex))

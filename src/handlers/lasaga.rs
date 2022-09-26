@@ -6,6 +6,8 @@ use reqwest::Url;
 use scraper::{Html, Selector};
 use teloxide::{prelude::*, types::InputFile};
 
+use crate::command_handler::{succeed, HandlerResult};
+
 fn extract_garfield_url(html: &str) -> anyhow::Result<String> {
     let document = Html::parse_document(html);
     let selector = Selector::parse(".item-comic-image > img").unwrap();
@@ -49,19 +51,19 @@ async fn handle_lasaga_for_page_url(
     Ok(())
 }
 
-pub async fn handle_lasaga(bot: &AutoSend<Bot>, chat_id: ChatId) -> anyhow::Result<()> {
+pub async fn handle_lasaga(bot: &AutoSend<Bot>, chat_id: ChatId) -> HandlerResult {
     // Technically fetch yesterdays comic to be safe
     let formatted_date = Utc::now().sub(Duration::days(1)).date().format("%Y/%m/%d");
     let url = format!("https://www.gocomics.com/garfield/{formatted_date}");
     handle_lasaga_for_page_url(bot, chat_id, &url)
         .await
         .context("Failed to handle lasaga")?;
-    Ok(())
+    succeed()
 }
 
-pub async fn handle_random_lasaga(bot: &AutoSend<Bot>, chat_id: ChatId) -> anyhow::Result<()> {
+pub async fn handle_random_lasaga(bot: &AutoSend<Bot>, chat_id: ChatId) -> HandlerResult {
     handle_lasaga_for_page_url(bot, chat_id, "https://www.gocomics.com/random/garfield")
         .await
         .context("Failed to handle random lasaga")?;
-    Ok(())
+    succeed()
 }
