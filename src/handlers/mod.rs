@@ -33,3 +33,4 @@ pub use google::connect_google_calendar;
 pub use google::disconnect_google_calendar;
 pub use google::handle_finish_google_auth;
 pub use google::handle_start_google_auth;
+pub use google::print_calendar_events;

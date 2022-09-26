@@ -8,6 +8,19 @@ use crate::{
     google::GoogleCalendarClientFactory, handlers, Command,
 };
 
+#[derive(Debug)]
+pub enum HandlerError {
+    ErrorReply(String),
+    Silent,
+    ActualError(anyhow::Error),
+}
+
+impl From<anyhow::Error> for HandlerError {
+    fn from(err: anyhow::Error) -> Self {
+        HandlerError::ActualError(err)
+    }
+}
+
 pub async fn handle_command(
     bot: AutoSend<Bot>,
     message: Message,
@@ -91,6 +104,14 @@ pub async fn handle_command(
                 .await
                 .context("disconnect_google_calendar")
         }
+        Command::Events => handlers::print_calendar_events(
+            &bot,
+            message,
+            db,
+            google_calendar_client_factory.clone(),
+        )
+        .await
+        .context("print_calendar_events"),
     };
 
     match result {

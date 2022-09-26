@@ -1,8 +1,12 @@
 use anyhow::Context;
-use google_calendar::types::MinAccessRole;
-use teloxide::prelude::*;
+use chrono::Local;
+use teloxide::{prelude::*, types::ParseMode};
 
-use crate::{db::DatabaseRef, google::GoogleCalendarClientFactory};
+use crate::{
+    db::DatabaseRef,
+    google::{get_events_to_announce, EventExt, GoogleCalendarClientFactory, UpcomingEvent},
+    telegram_utils::telegram_escape,
+};
 
 pub async fn handle_start_google_auth(
     bot: &AutoSend<Bot>,
@@ -112,14 +116,6 @@ pub async fn handle_finish_google_auth(
     bot.send_message(message.chat.id, format!("Kohtalosi on sinetöity. 👌"))
         .await?;
 
-    let calendars = client
-        .calendar_list()
-        .list_all(MinAccessRole::Reader, false, false)
-        .await
-        .context("Expected reading calendars to succeed.")?;
-
-    println!("Calendars: {:#?}", calendars);
-
     Ok(())
 }
 
@@ -207,6 +203,107 @@ pub async fn disconnect_google_calendar(
         "Kytkemäsi kalenteri on irrotettu kanavalta.",
     )
     .await?;
+
+    Ok(())
+}
+
+pub async fn print_calendar_events(
+    bot: &AutoSend<Bot>,
+    message: Message,
+    db: DatabaseRef,
+    google_calendar_client_factory: GoogleCalendarClientFactory,
+) -> anyhow::Result<()> {
+    let chat_id = message.chat.id;
+
+    let google_calendar_client_factory = match google_calendar_client_factory.as_ref() {
+        None => {
+            bot.send_message(
+                chat_id,
+                "Tämä Haloobot-instanssi ei tue Google-integraatiota. Syylliset esiin.",
+            )
+            .await?;
+            return Ok(());
+        }
+        Some(client_factory) => client_factory,
+    };
+
+    let calendar_id = db.get_connected_calendar_id(chat_id).await?;
+
+    let calendar_id = match calendar_id {
+        None => {
+            bot.send_message(
+                chat_id,
+                "Tätä kanavaa ei ole kytketty mihinkään kalenteriin. Käytä /connectgooglecalendar -komentoa.",
+            )
+            .await?;
+            return Ok(());
+        }
+        Some(calendar_id) => calendar_id,
+    };
+
+    let sender = message
+        .from()
+        .context("Expected message to have a sender")?;
+
+    let client = google_calendar_client_factory
+        .create_client_for_user(sender.id)
+        .await?
+        // TODO handle
+        .expect("Expected user to have a Google client");
+
+    let now = Local::now();
+    let events_summary = get_events_to_announce(&client, &calendar_id, now).await?;
+
+    if events_summary.today.is_empty() && events_summary.upcoming.is_empty() {
+        bot.send_message(chat_id, "Ei tulevia tapahtumia kalenterissa. 😔")
+            .await?;
+        return Ok(());
+    }
+
+    let mut message = String::new();
+
+    if !events_summary.today.is_empty() {
+        message.push_str("*Tänään*:\n");
+        for event in events_summary.today {
+            let event_start = event.start.unwrap();
+            let event_timestamp = if let Some(date_time) = event_start.date_time {
+                date_time
+                    .with_timezone(&Local)
+                    .format(" (%H:%M)")
+                    .to_string()
+            } else {
+                "".to_string()
+            };
+            message.push_str(&telegram_escape(&format!(
+                "{}{}\n",
+                event.summary, event_timestamp
+            )));
+        }
+    }
+
+    if !message.is_empty() {
+        message.push_str("\n");
+    }
+
+    if !events_summary.upcoming.is_empty() {
+        message.push_str("*Tulevat tapahtumat*:\n");
+        for UpcomingEvent { event, days } in events_summary.upcoming {
+            let event_local_time = event.get_start_date().unwrap();
+            let event_date = event_local_time.format("%d.%m.%Y");
+            let days_label = match days {
+                1 => String::from("Huomenna"),
+                days => format!("{} päivän päästä", days),
+            };
+            message.push_str(&telegram_escape(&format!(
+                "{}: {} ({})\n",
+                days_label, event.summary, event_date
+            )));
+        }
+    }
+
+    bot.send_message(chat_id, message)
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
 
     Ok(())
 }

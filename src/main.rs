@@ -32,6 +32,7 @@ mod handlers;
 mod message_handler;
 mod scheduler;
 mod subscriptions;
+mod telegram_utils;
 
 #[derive(BotCommands, Clone, Debug)]
 #[command(rename = "lowercase", description = "Tuetut komennot:")]
@@ -85,6 +86,9 @@ pub enum Command {
 
     #[command(description = "Poista Google-kalenteri kanavalta")]
     DisconnectGoogleCalendar,
+
+    #[command(description = "Listaa päivän kalenteritapahtumakoosteen")]
+    Events,
 }
 
 fn handler(start_time: DateTime<Utc>) -> UpdateHandler<anyhow::Error> {

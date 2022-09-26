@@ -426,4 +426,39 @@ impl DatabaseRef {
 
         Ok(())
     }
+
+    pub async fn get_connected_calendar_id(
+        &self,
+        chat_id: ChatId,
+    ) -> anyhow::Result<Option<String>> {
+        let db = self.0.lock().await;
+
+        let mut statement = db.0.prepare(
+            "
+            SELECT calendar_id
+            FROM connected_calendars
+            WHERE chat_id = ?1
+        ",
+        )?;
+
+        let rows = statement
+            .query((chat_id.0,))
+            .context("Failed to query database")?;
+
+        let maybe_row = rows
+            .mapped(|row| {
+                let calendar_id: String = row.get(0)?;
+
+                Ok(calendar_id)
+            })
+            .find_map(|row| match row {
+                Err(err) => {
+                    log::error!("Failed to read connected calendar row: {:?}", err);
+                    None
+                }
+                Ok(row) => Some(row),
+            });
+
+        Ok(maybe_row)
+    }
 }
