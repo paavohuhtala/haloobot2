@@ -71,9 +71,6 @@ pub async fn handle_command(
         Command::GetExcuse => handlers::handle_get_excuse()
             .await
             .handler_context("handle_get_excuse"),
-        Command::DudeCarpet => handlers::handle_dude_carpet()
-            .await
-            .handler_context("handle_dude_carpet"),
         Command::Help => send_help(&bot, &message).await.handler_context("send_help"),
         Command::Fingerpori => handlers::handle_fingerpori(&bot, chat_id)
             .await

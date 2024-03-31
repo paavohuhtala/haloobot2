@@ -40,9 +40,6 @@ pub enum Command {
     #[command(description = "Miksi härveli ei toimi?")]
     GetExcuse,
 
-    #[command(description = "Moro äijät mitäs äijät :D")]
-    DudeCarpet,
-
     #[command(description = "Apuva")]
     Help,
 
